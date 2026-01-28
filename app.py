@@ -126,6 +126,8 @@ def calculate_o2_time(air_time, depth):
 def calculate_profile_index(subset, elapsed_min, risk_active, is_longer):
     """
     Returns the target profile index based on what we are APPROACHING (>=).
+    Safety Shift is UNCONDITIONAL (Always +1 if active).
+    Longer Shift is UNCONDITIONAL (Always +1 if active).
     """
     if subset.empty: return -1
 
@@ -135,12 +137,9 @@ def calculate_profile_index(subset, elapsed_min, risk_active, is_longer):
         base_idx = subset.index.get_loc(valid_times.index[0])
     else:
         base_idx = len(subset) - 1
-
-    first_table_time = subset['bottom_time_min'].min()
-    is_on_table = (elapsed_min >= first_table_time)
-    safety_adder = 1 if (risk_active and is_on_table) else 0
     
-
+    safety_adder = 1 if risk_active else 0
+    
     longer_adder = 1 if is_longer else 0
     
     final_idx = base_idx + safety_adder + longer_adder
@@ -163,6 +162,14 @@ if 'timer_5_start' not in st.session_state:
     st.session_state.timer_5_start = None
 if 'timer_10_start' not in st.session_state:
     st.session_state.timer_10_start = None
+
+if 'deco_phase_active' not in st.session_state:
+    st.session_state.deco_phase_active = False
+if 'deco_start_time' not in st.session_state:
+    st.session_state.deco_start_time = None
+if 'locked_bottom_time_min' not in st.session_state:
+    st.session_state.locked_bottom_time_min = 0
+
 
 def render_input_view(placeholder):
     with placeholder.container():
@@ -189,8 +196,14 @@ def render_input_view(placeholder):
             st.session_state.page = 'results'
             st.session_state.debug_manual_mode = False
             st.session_state.debug_manual_time = 0
+            
             st.session_state.timer_5_start = None
             st.session_state.timer_10_start = None
+            
+            st.session_state.deco_phase_active = False
+            st.session_state.deco_start_time = None
+            st.session_state.locked_bottom_time_min = 0
+            
             placeholder.empty()
             st.rerun()
 
@@ -199,28 +212,58 @@ def render_results_view(placeholder):
     with placeholder.container():
         @st.fragment(run_every=1)
         def live_timer_header():
+            
             if st.session_state.get('debug_manual_mode', False):
-                elapsed_min = st.session_state.get('debug_manual_time', 0)
-                elapsed_sec = 0
+                raw_elapsed_min = st.session_state.get('debug_manual_time', 0)
+                raw_elapsed_sec = 0
                 is_debug = True
             else:
                 elapsed_seconds = int(time.time() - st.session_state.start_time)
-                elapsed_min = elapsed_seconds // 60
-                elapsed_sec = elapsed_seconds % 60
+                raw_elapsed_min = elapsed_seconds // 60
+                raw_elapsed_sec = elapsed_seconds % 60
                 is_debug = False
+            
+            if st.session_state.deco_phase_active:
+                calculation_time_min = st.session_state.locked_bottom_time_min
+                display_min = st.session_state.locked_bottom_time_min
+                display_sec = 0 
+                
+                deco_seconds_total = int(time.time() - st.session_state.deco_start_time)
+                deco_min = deco_seconds_total // 60
+                deco_sec = deco_seconds_total % 60
+                
+                status_text = "BOTTOM TIME (ENDED)"
+                timer_color = "#888888" 
+            else:
+                calculation_time_min = raw_elapsed_min
+                display_min = raw_elapsed_min
+                display_sec = raw_elapsed_sec
+                
+                deco_min = 0
+                deco_sec = 0
+                
+                if is_debug:
+                    timer_color = "#3399FF"
+                    status_text = "MANUAL DEBUG TIME"
+                elif st.session_state.safety_buffer_active:
+                    timer_color = "#FFA500"
+                    status_text = "BOTTOM TIME"
+                else:
+                    timer_color = "#00CC66"
+                    status_text = "BOTTOM TIME"
 
             user_depth = st.session_state.planned_depth
             risk_active = st.session_state.safety_buffer_active
             current_table_depth = get_safe_table_depth(user_depth, profiles_df)
             current_subset = profiles_df[profiles_df['dive_depth_m'] == current_table_depth].sort_values('bottom_time_min')
             
-            idx_current = calculate_profile_index(current_subset, elapsed_min, risk_active, is_longer=False)
+            idx_current = calculate_profile_index(current_subset, calculation_time_min, risk_active, is_longer=False)
             
             if idx_current != -1:
                 row = current_subset.iloc[idx_current]
                 current_profile_str = f"{current_table_depth} / {row['bottom_time_min']}"
                 
-                idx_raw = calculate_profile_index(current_subset, elapsed_min, risk_active=False, is_longer=False)
+                idx_raw = calculate_profile_index(current_subset, calculation_time_min, risk_active=False, is_longer=False)
                 safety_visual = (idx_current > idx_raw)
                 current_profile_id = row['profile_id']
             else:
@@ -228,23 +271,21 @@ def render_results_view(placeholder):
                 safety_visual = False
                 current_profile_id = None
 
-            c1, c2, c3 = st.columns([1, 2, 1])
+            c1, c2, c3, c4 = st.columns([1, 1.5, 1.5, 1])
             with c1:
                 st.metric("PLANNED DEPTH", f"{user_depth}m", delta=f"Using Table: {current_table_depth}m" if current_table_depth != user_depth else None, delta_color="off")
             with c2:
-                if is_debug:
-                    color = "#3399FF"
-                    status_text = "MANUAL DEBUG TIME"
-                elif risk_active:
-                    color = "#FFA500"
-                    status_text = "ELAPSED TIME"
-                else:
-                    color = "#00CC66"
-                    status_text = "ELAPSED TIME"
-                st.markdown(f"<h1 style='text-align: center; color: {color};'>{elapsed_min:02d}:{elapsed_sec:02d}</h1>", unsafe_allow_html=True)
+                st.markdown(f"<h1 style='text-align: center; color: {timer_color}; margin: 0; padding: 0;'>{display_min:02d}:{display_sec:02d}</h1>", unsafe_allow_html=True)
                 st.caption(f"<p style='text-align: center;'>{status_text}</p>", unsafe_allow_html=True)
             with c3:
+                if st.session_state.deco_phase_active:
+                    st.markdown(f"<h1 style='text-align: center; color: #3399FF; margin: 0; padding: 0;'>{deco_min:02d}:{deco_sec:02d}</h1>", unsafe_allow_html=True)
+                    st.caption(f"<p style='text-align: center;'>DECOMPRESSION TIME</p>", unsafe_allow_html=True)
+                else:
+                    st.markdown("") 
+            with c4:
                 st.metric("PROFILE", current_profile_str, delta="Safety (+1)" if safety_visual else None)
+            
             st.divider()
 
             st.markdown("### Next Stops Plan")
@@ -257,23 +298,23 @@ def render_results_view(placeholder):
             ascent_time = 0
 
             if selection == "Current Plan":
-                target_idx = calculate_profile_index(current_subset, elapsed_min, risk_active, is_longer=False)
+                target_idx = calculate_profile_index(current_subset, calculation_time_min, risk_active, is_longer=False)
                 if target_idx != -1: target_profile_id = current_subset.iloc[target_idx]['profile_id']
             
             elif selection == "Longer":
-                target_idx = calculate_profile_index(current_subset, elapsed_min, risk_active, is_longer=True)
+                target_idx = calculate_profile_index(current_subset, calculation_time_min, risk_active, is_longer=True)
                 if target_idx != -1: target_profile_id = current_subset.iloc[target_idx]['profile_id']
             
             elif selection == "Deeper":
                 next_depth = get_next_depth(current_table_depth, profiles_df)
                 deep_subset = profiles_df[profiles_df['dive_depth_m'] == next_depth].sort_values('bottom_time_min')
-                target_idx = calculate_profile_index(deep_subset, elapsed_min, risk_active, is_longer=False)
+                target_idx = calculate_profile_index(deep_subset, calculation_time_min, risk_active, is_longer=False)
                 if target_idx != -1: target_profile_id = deep_subset.iloc[target_idx]['profile_id']
             
             elif selection == "Deeper & Longer":
                 next_depth = get_next_depth(current_table_depth, profiles_df)
                 deep_subset = profiles_df[profiles_df['dive_depth_m'] == next_depth].sort_values('bottom_time_min')
-                target_idx = calculate_profile_index(deep_subset, elapsed_min, risk_active, is_longer=True)
+                target_idx = calculate_profile_index(deep_subset, calculation_time_min, risk_active, is_longer=True)
                 if target_idx != -1: target_profile_id = deep_subset.iloc[target_idx]['profile_id']
 
             if target_profile_id is not None:
@@ -308,7 +349,10 @@ def render_results_view(placeholder):
                 cards_html += '</div>'
                 st.markdown(cards_html, unsafe_allow_html=True)
             else:
-                st.warning("Data unavailable for this scenario.")
+                if selection == "Current Plan":
+                     st.info(f"Dive time is within safety limits. No profile active yet.")
+                else:
+                     st.warning("Data unavailable or time threshold not reached.")
             
             st.divider()
 
@@ -406,18 +450,42 @@ def render_results_view(placeholder):
 
         live_timer_header()
         
+        st.write("")
+        st.write("")
+        col_start_deco, col_end_dive = st.columns([1, 1])
+        
+        with col_start_deco:
+            if not st.session_state.deco_phase_active:
+                if st.button("Start Decompression", use_container_width=True):
+                    if st.session_state.get('debug_manual_mode', False):
+                        current_mins = st.session_state.get('debug_manual_time', 0)
+                    else:
+                        current_secs = int(time.time() - st.session_state.start_time)
+                        current_mins = current_secs // 60
+                    
+                    st.session_state.locked_bottom_time_min = current_mins
+                    st.session_state.deco_start_time = time.time()
+                    st.session_state.deco_phase_active = True
+                    st.rerun()
+            else:
+                 st.info("Decompression Phase Active")
+
+        with col_end_dive:
+            if st.button("End Dive", use_container_width=True):
+                st.session_state.page = 'input'
+                st.session_state.safety_buffer_active = False
+                st.session_state.timer_5_start = None
+                st.session_state.timer_10_start = None
+                st.session_state.deco_phase_active = False
+                st.session_state.deco_start_time = None
+                st.session_state.locked_bottom_time_min = 0
+                placeholder.empty()
+                st.rerun()
+        
         with st.expander("🛠️ Debug Options"):
             chk_debug = st.checkbox("Enable Manual Time Override", key="debug_manual_mode")
             if chk_debug:
                 st.number_input("Set Elapsed Time (minutes):", min_value=0, value=0, step=1, key="debug_manual_time")
-
-        if st.button("End Dive"):
-            st.session_state.page = 'input'
-            st.session_state.safety_buffer_active = False
-            st.session_state.timer_5_start = None
-            st.session_state.timer_10_start = None
-            placeholder.empty()
-            st.rerun()
 
 def main():
     main_placeholder = st.empty()
