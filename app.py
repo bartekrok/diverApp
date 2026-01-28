@@ -169,12 +169,14 @@ if 'deco_start_time' not in st.session_state:
     st.session_state.deco_start_time = None
 if 'locked_bottom_time_min' not in st.session_state:
     st.session_state.locked_bottom_time_min = 0
+if 'locked_bottom_time_sec' not in st.session_state:
+    st.session_state.locked_bottom_time_sec = 0
 
 
 def render_input_view(placeholder):
     with placeholder.container():
         st.title("🤿 Start New Dive")
-        depth_input = st.number_input("Planned Depth (m):", min_value=0, value=15, step=1, key="input_depth")
+        depth_input = st.number_input("Planned Depth (m):", min_value=0, value=12, step=1, key="input_depth")
         st.markdown("### Safety Risk Factors")
         c1, c2 = st.columns(2)
         with c1:
@@ -203,6 +205,7 @@ def render_input_view(placeholder):
             st.session_state.deco_phase_active = False
             st.session_state.deco_start_time = None
             st.session_state.locked_bottom_time_min = 0
+            st.session_state.locked_bottom_time_sec = 0
             
             placeholder.empty()
             st.rerun()
@@ -226,7 +229,7 @@ def render_results_view(placeholder):
             if st.session_state.deco_phase_active:
                 calculation_time_min = st.session_state.locked_bottom_time_min
                 display_min = st.session_state.locked_bottom_time_min
-                display_sec = 0 
+                display_sec = st.session_state.locked_bottom_time_sec 
                 
                 deco_seconds_total = int(time.time() - st.session_state.deco_start_time)
                 deco_min = deco_seconds_total // 60
@@ -459,11 +462,14 @@ def render_results_view(placeholder):
                 if st.button("Start Decompression", use_container_width=True):
                     if st.session_state.get('debug_manual_mode', False):
                         current_mins = st.session_state.get('debug_manual_time', 0)
+                        current_secs_part = 0
                     else:
-                        current_secs = int(time.time() - st.session_state.start_time)
-                        current_mins = current_secs // 60
+                        total_elapsed = int(time.time() - st.session_state.start_time)
+                        current_mins = total_elapsed // 60
+                        current_secs_part = total_elapsed % 60
                     
                     st.session_state.locked_bottom_time_min = current_mins
+                    st.session_state.locked_bottom_time_sec = current_secs_part
                     st.session_state.deco_start_time = time.time()
                     st.session_state.deco_phase_active = True
                     st.rerun()
@@ -479,6 +485,7 @@ def render_results_view(placeholder):
                 st.session_state.deco_phase_active = False
                 st.session_state.deco_start_time = None
                 st.session_state.locked_bottom_time_min = 0
+                st.session_state.locked_bottom_time_sec = 0
                 placeholder.empty()
                 st.rerun()
         
