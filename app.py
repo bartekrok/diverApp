@@ -3,9 +3,13 @@ import pandas as pd
 import time
 import math
 from datetime import datetime
+from fpdf import FPDF
+import matplotlib.pyplot as plt
 
+# --- PAGE CONFIG ---
 st.set_page_config(page_title="Diver Decompression Planner", layout="wide")
 
+# --- CUSTOM CSS ---
 st.markdown("""
 <style>
 div.scrolling-wrapper {
@@ -192,6 +196,113 @@ def calculate_profile_index(subset, elapsed_min, risk_active, is_longer):
         
     return final_idx
 
+def generate_dive_profile_chart(logbook_data, profiles_df, stops_df):
+    """
+    Generates a matplotlib figure for the dive profile based on the saved logbook context.
+    """
+    profile_id = logbook_data.get('final_profile_id')
+    depth = logbook_data.get('depth', 0)
+    
+    if profile_id is None:
+        return None
+
+    row = profiles_df[profiles_df['profile_id'] == profile_id].iloc[0]
+    my_stops = stops_df[stops_df['profile_id'] == profile_id].sort_values('stop_depth_m', ascending=False)
+    
+    bottom_time = row['bottom_time_min']
+    ascent_time = row['ascent_to_1st_stop_min']
+    
+    x_points = [0]
+    y_points = [0]
+    
+    descent_time = 2
+    x_points.append(descent_time)
+    y_points.append(depth)
+    
+    x_points.append(bottom_time)
+    y_points.append(depth)
+    
+    current_time = bottom_time + ascent_time
+    
+    if not my_stops.empty:
+        first_stop_depth = my_stops.iloc[0]['stop_depth_m']
+        x_points.append(current_time)
+        y_points.append(first_stop_depth)
+        
+        for _, stop in my_stops.iterrows():
+            stop_depth = stop['stop_depth_m']
+            duration = stop['duration_air_min'] 
+            
+            current_time += duration
+            x_points.append(current_time)
+            y_points.append(stop_depth)
+            
+    else:
+        x_points.append(current_time)
+        y_points.append(0)
+
+    if y_points[-1] != 0:
+        x_points.append(current_time + 1)
+        y_points.append(0)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(x_points, y_points, marker='o', linestyle='-', color='black', linewidth=2)
+    
+    ax.invert_yaxis()
+    ax.set_xlabel("Time (min)")
+    ax.set_ylabel("Depth (m)")
+    ax.set_title(f"Dive Profile [Max Depth: {depth}m | Table Time: {bottom_time}min]")
+    ax.grid(True, which='both', linestyle='--', linewidth=0.5)
+    
+    ax.fill_between(x_points, y_points, max(y_points)+5, color='#e0f7fa', alpha=0.5)
+    
+    return fig
+
+def create_pdf(entries):
+    pdf = FPDF(orientation='L', unit='mm', format='A4')
+    pdf.add_page()
+    
+    pdf.set_font("Arial", 'B', 14)
+    pdf.cell(0, 10, "RAPORT Z NURKOWANIA", 0, 1, 'C')
+    pdf.ln(2)
+    
+    pdf.set_font("Arial", 'B', 5)
+    line_height = 8
+    
+    headers = [
+        ("Lp.", 6), ("Data", 14), ("Nazwisko", 20), ("Rejon/Gl.", 15),
+        ("Start", 8), ("Gleb.", 8), ("St.Deco", 9), ("Dzwon", 9),
+        ("Koniec", 8), ("T.Woda", 9), ("T.Komora", 10), ("T.Ogol", 9),
+        ("T.Pobyt", 10), ("Czynnik", 9), ("Sprzet", 12),
+        ("Sprawdz.", 12), ("Prace / Dezynfekcja", 35), ("Stan M.", 8),
+        ("T.Wody", 8), ("T.Pow.", 8), ("Prad", 8), ("Podpis", 25)
+    ]
+    
+    for header, width in headers:
+        pdf.cell(width, line_height, header, 1, 0, 'C')
+    pdf.ln()
+    
+    pdf.set_font("Arial", '', 5)
+    for row in entries:
+        data_values = [
+            str(row.get("lp", "")), str(row.get("data", "")), str(row.get("nazwisko", "")),
+            str(row.get("rejon", "")), str(row.get("start_zanurzania", "")), str(row.get("glebokosc", "")),
+            str(row.get("start_wynurzania", "")), str(row.get("zamkniecie_dzwonu", "")), str(row.get("koniec_wynurzania", "")),
+            str(row.get("czas_deco_woda", "")), str(row.get("czas_deco_komora", "")), str(row.get("czas_ogolny", "")),
+            str(row.get("czas_komora_pobyt", "")), str(row.get("czynnik", "")), str(row.get("sprzet", "")),
+            str(row.get("sprawdzenie", "")), str(row.get("uwagi", "")), str(row.get("stan_morza", "")),
+            str(row.get("temp_wody", "")), str(row.get("temp_pow", "")), str(row.get("prad", "")),
+            str(row.get("podpis", ""))
+        ]
+        for i, value in enumerate(data_values):
+            width = headers[i][1]
+            max_len = int(width * 2.5) 
+            display_text = (value[:max_len] + '..') if len(value) > max_len else value
+            pdf.cell(width, line_height, display_text, 1, 0, 'C')
+        pdf.ln()
+        
+    return pdf.output(dest='S').encode('latin-1', 'replace')
+
 if 'page' not in st.session_state:
     st.session_state.page = 'input'
 if 'start_time' not in st.session_state:
@@ -228,11 +339,17 @@ if 'break_duration' not in st.session_state:
 
 if 'logbook_context' not in st.session_state:
     st.session_state.logbook_context = {}
+if 'logbook_entries' not in st.session_state:
+    st.session_state.logbook_entries = []
+if 'form_lp' not in st.session_state:
+    st.session_state.form_lp = 1
+if 'active_profile_id_tracker' not in st.session_state:
+    st.session_state.active_profile_id_tracker = None
 
 def render_input_view(placeholder):
     with placeholder.container():
         st.title("🤿 Start New Dive")
-        depth_input = st.number_input("Planned Depth (m):", min_value=0, value=15, step=1, key="input_depth")
+        depth_input = st.number_input("Planned Depth (m):", min_value=0, value=12, step=1, key="input_depth")
         st.markdown("### Safety Risk Factors")
         c1, c2 = st.columns(2)
         with c1:
@@ -267,6 +384,9 @@ def render_input_view(placeholder):
             st.session_state.break_start_time = None
             st.session_state.break_duration = 0
             st.session_state.logbook_context = {}
+            st.session_state.logbook_entries = []
+            st.session_state.form_lp = 1
+            st.session_state.active_profile_id_tracker = None
             
             placeholder.empty()
             st.rerun()
@@ -303,9 +423,7 @@ def render_results_view(placeholder):
                 calculation_time_min = raw_elapsed_min
                 display_min = raw_elapsed_min
                 display_sec = raw_elapsed_sec
-                
-                deco_min = 0
-                deco_sec = 0
+                deco_min = 0; deco_sec = 0
                 
                 if is_debug:
                     timer_color = "#3399FF"
@@ -329,11 +447,9 @@ def render_results_view(placeholder):
                 current_profile_str = f"{current_table_depth} / {row['bottom_time_min']}"
                 idx_raw = calculate_profile_index(current_subset, calculation_time_min, risk_active=False, is_longer=False)
                 safety_visual = (idx_current > idx_raw)
-                current_profile_id = row['profile_id']
             else:
                 current_profile_str = "No Data"
                 safety_visual = False
-                current_profile_id = None
 
             c1, c2, c3, c4 = st.columns([1, 1.5, 1.5, 1])
             with c1:
@@ -357,7 +473,6 @@ def render_results_view(placeholder):
                 st.markdown("### Next Stops Plan")
                 scenario_options = ["Current Plan", "Deeper", "Longer", "Deeper & Longer"]
                 selection = st.radio("Select Scenario:", scenario_options, index=0, horizontal=True, label_visibility="collapsed")
-            
             with col_o2:
                 st.markdown("### ") 
                 st.session_state.deco_o2_enabled = st.checkbox("Using Oxygen", value=st.session_state.deco_o2_enabled)
@@ -380,13 +495,13 @@ def render_results_view(placeholder):
                 target_idx = calculate_profile_index(deep_subset, calculation_time_min, risk_active, is_longer=True)
                 if target_idx != -1: target_profile_id = deep_subset.iloc[target_idx]['profile_id']
 
-            
+            st.session_state.active_profile_id_tracker = target_profile_id
+
             is_break_active = False
             if st.session_state.break_phase is not None:
                 is_break_active = True
                 elapsed_break = current_timestamp - st.session_state.break_start_time
                 remaining_break = st.session_state.break_duration - elapsed_break
-                
                 if remaining_break <= 0:
                     if st.session_state.break_phase == '5min':
                         st.session_state.break_phase = '10min'
@@ -404,22 +519,11 @@ def render_results_view(placeholder):
             if target_profile_id is not None:
                 stops_main = stops_df[stops_df['profile_id'] == target_profile_id].sort_values('stop_depth_m', ascending=False)
                 row_main = profiles_df[profiles_df['profile_id'] == target_profile_id].iloc[0]
-                
-                active_profile_steps.append({
-                    'type': 'ascent',
-                    'depth': 0, 
-                    'air_sec': row_main['ascent_to_1st_stop_min'] * 60,
-                    'o2_sec': None 
-                })
+                active_profile_steps.append({'type': 'ascent', 'depth': 0, 'air_sec': row_main['ascent_to_1st_stop_min'] * 60, 'o2_sec': None})
                 for _, stop in stops_main.iterrows():
                     d_air_min = stop['duration_air_min']
                     d_o2_min = calculate_o2_time(d_air_min, stop['stop_depth_m'])
-                    active_profile_steps.append({
-                        'type': 'stop',
-                        'depth': stop['stop_depth_m'],
-                        'air_sec': d_air_min * 60,
-                        'o2_sec': d_o2_min * 60 if d_o2_min else None
-                    })
+                    active_profile_steps.append({'type': 'stop', 'depth': stop['stop_depth_m'], 'air_sec': d_air_min * 60, 'o2_sec': d_o2_min * 60 if d_o2_min else None})
 
             if st.session_state.deco_phase_active and target_profile_id is not None and active_profile_steps:
                 last_tick = st.session_state.deco_last_tick
@@ -428,65 +532,39 @@ def render_results_view(placeholder):
                 else:
                     delta = current_timestamp - last_tick
                     st.session_state.deco_last_tick = current_timestamp
-                    
                     if not is_break_active:
                         curr_idx = st.session_state.deco_step_index
                         if curr_idx < len(active_profile_steps):
                             step_data = active_profile_steps[curr_idx]
-                            
                             efficiency = 1.0 
                             if st.session_state.deco_o2_enabled and step_data['o2_sec'] is not None:
                                 efficiency = step_data['air_sec'] / step_data['o2_sec']
-                            
                             st.session_state.deco_step_progress_air_sec += (delta * efficiency)
-                            
-                            req_air = step_data['air_sec']
-                            if st.session_state.deco_step_progress_air_sec >= req_air:
+                            if st.session_state.deco_step_progress_air_sec >= step_data['air_sec']:
                                 st.session_state.deco_step_index += 1
                                 st.session_state.deco_step_progress_air_sec = 0.0
             
             if target_profile_id is not None:
                 target_row = profiles_df[profiles_df['profile_id'] == target_profile_id].iloc[0]
-                
                 st.markdown(f"**Plan:** {selection} | **Profile:** {target_row['dive_depth_m']} / {target_row['bottom_time_min']}")
-                
                 vis_stops = stops_df[stops_df['profile_id'] == target_profile_id].sort_values('stop_depth_m', ascending=False)
                 vis_steps = []
-                
-                vis_steps.append({
-                    'label_depth': "Ascent to 1st stop",
-                    'label_time': f"{target_row['ascent_to_1st_stop_min']} min",
-                    'air_min': target_row['ascent_to_1st_stop_min'],
-                    'o2_min': None
-                })
+                vis_steps.append({'label_depth': "Ascent to 1st stop", 'label_time': f"{target_row['ascent_to_1st_stop_min']} min", 'air_min': target_row['ascent_to_1st_stop_min'], 'o2_min': None})
                 for _, stop in vis_stops.iterrows():
                     d_air = stop['duration_air_min']
                     d_o2 = calculate_o2_time(d_air, stop['stop_depth_m'])
                     lbl = f"{d_air}({d_o2}) min" if d_o2 else f"{d_air} min"
-                    vis_steps.append({
-                        'label_depth': f"at {stop['stop_depth_m']} m",
-                        'label_time': lbl,
-                        'air_min': d_air,
-                        'o2_min': d_o2
-                    })
+                    vis_steps.append({'label_depth': f"at {stop['stop_depth_m']} m", 'label_time': lbl, 'air_min': d_air, 'o2_min': d_o2})
                 
                 cards_html = '<div class="scrolling-wrapper">'
-                
                 for i, step in enumerate(vis_steps):
-                    is_active = False
-                    is_done = False
-                    is_paused = False
-                    
+                    is_active = False; is_done = False; is_paused = False
                     if st.session_state.deco_phase_active:
-                        if i < st.session_state.deco_step_index:
-                            is_done = True
+                        if i < st.session_state.deco_step_index: is_done = True
                         elif i == st.session_state.deco_step_index:
                             is_active = True
-                            if is_break_active:
-                                is_paused = True
-                    
+                            if is_break_active: is_paused = True
                     content_html = f'<div class="card-time">{step["label_time"]}</div><div class="card-depth">{step["label_depth"]}</div>'
-                    
                     if is_active:
                         if is_paused:
                             content_html += '<div class="card-paused-text">PAUSED (Break)</div>'
@@ -494,40 +572,29 @@ def render_results_view(placeholder):
                             progress_air = st.session_state.deco_step_progress_air_sec
                             total_air_sec = step['air_min'] * 60.0
                             remaining_air_sec = max(0, total_air_sec - progress_air)
-                            
                             efficiency = 1.0
                             if st.session_state.deco_o2_enabled and step['o2_min'] is not None:
                                 efficiency = (step['air_min'] * 60) / (step['o2_min'] * 60)
-                            
-                            real_remaining_sec = remaining_air_sec / efficiency
-                            rem_min = int(real_remaining_sec // 60)
-                            rem_sec = int(real_remaining_sec % 60)
-                            
+                            real_rem = remaining_air_sec / efficiency
+                            rem_min = int(real_rem // 60); rem_sec = int(real_rem % 60)
                             content_html += f'<div class="card-countdown">{rem_min}:{rem_sec:02d}</div>'
-                        
                     classes = ["card"]
                     if is_done: classes.append("done")
                     if is_active: 
                         classes.append("active")
                         if is_paused: classes.append("paused")
                     class_str = " ".join(classes)
-                    
                     cards_html += f'<div class="{class_str}">{content_html}</div>'
-                
                 cards_html += '</div>'
                 st.markdown(cards_html, unsafe_allow_html=True)
             else:
-                if selection == "Current Plan":
-                     st.info(f"Dive time is within safety limits. No profile active yet.")
-                else:
-                     st.warning("Data unavailable or time threshold not reached.")
+                if selection == "Current Plan": st.info(f"Dive time is within safety limits. No profile active yet.")
+                else: st.warning("Data unavailable or time threshold not reached.")
             
             st.divider()
 
-            st.subheader("Adjust Depth")
             col_in, col_btn = st.columns([3, 1])
-            with col_in:
-                new_depth = st.number_input("New Depth (m):", value=st.session_state.planned_depth, step=1, key="adjust_depth_input")
+            with col_in: new_depth = st.number_input("New Depth (m):", value=st.session_state.planned_depth, step=1, key="adjust_depth_input")
             with col_btn:
                 st.write(" ")
                 if st.button("Apply Changes", use_container_width=True):
@@ -535,12 +602,8 @@ def render_results_view(placeholder):
                     st.rerun()
 
             st.write("") 
-            
-            chamber_msg = "Not available"
-            is_chamber_avail = False
-            aweigh_msg = "Not Available"
-            is_aweigh_avail = False
-
+            chamber_msg = "Not available"; is_chamber_avail = False
+            aweigh_msg = "Not Available"; is_aweigh_avail = False
             if target_profile_id is not None:
                 target_stops = stops_df[stops_df['profile_id'] == target_profile_id]
                 eligible_stops = target_stops[target_stops['can_enter_chamber'] == 1]
@@ -548,33 +611,20 @@ def render_results_view(placeholder):
                     deepest_stop = eligible_stops['stop_depth_m'].max()
                     chamber_msg = f"Available from {deepest_stop} meters downwards"
                     is_chamber_avail = True
-            
-            if target_profile_id is not None:
-                target_stops = stops_df[stops_df['profile_id'] == target_profile_id]
-                if not target_stops.empty:
-                    max_stop_depth = target_stops['stop_depth_m'].max()
-                    if max_stop_depth > 6:
-                        is_aweigh_avail = False
-                        aweigh_msg = "Not Available"
-                    else:
-                        is_aweigh_avail = True
-                        aweigh_msg = "Available"
-                else:
-                    is_aweigh_avail = True
-                    aweigh_msg = "Available"
-            else:
-                is_aweigh_avail = True
-                aweigh_msg = "Available"
+                
+                target_stops_aweigh = stops_df[stops_df['profile_id'] == target_profile_id]
+                if not target_stops_aweigh.empty:
+                    max_stop_depth = target_stops_aweigh['stop_depth_m'].max()
+                    if max_stop_depth > 6: is_aweigh_avail = False; aweigh_msg = "Not Available"
+                    else: is_aweigh_avail = True; aweigh_msg = "Available"
+                else: is_aweigh_avail = True; aweigh_msg = "Available"
+            else: is_aweigh_avail = True; aweigh_msg = "Available"
 
             col_txt_1, col_status_1, col_t_break, col_empty = st.columns([1.5, 1.5, 1.0, 0.1])
-            with col_txt_1:
-                st.markdown("**Decompression inside a decompression chamber**")
+            with col_txt_1: st.markdown("**Decompression inside a decompression chamber**")
             with col_status_1:
-                if is_chamber_avail:
-                    st.markdown(f'<div class="chamber-status-box">{chamber_msg}</div>', unsafe_allow_html=True)
-                else:
-                    st.markdown(f'<div class="chamber-unavailable-box">{chamber_msg}</div>', unsafe_allow_html=True)
-            
+                if is_chamber_avail: st.markdown(f'<div class="chamber-status-box">{chamber_msg}</div>', unsafe_allow_html=True)
+                else: st.markdown(f'<div class="chamber-unavailable-box">{chamber_msg}</div>', unsafe_allow_html=True)
             with col_t_break:
                 if st.session_state.break_phase is None:
                     if st.button("Start 5' Break"):
@@ -585,56 +635,43 @@ def render_results_view(placeholder):
                 else:
                     elapsed = time.time() - st.session_state.break_start_time
                     remaining = max(0, st.session_state.break_duration - elapsed)
-                    mins = int(remaining // 60)
-                    secs = int(remaining % 60)
-                    
+                    mins = int(remaining // 60); secs = int(remaining % 60)
                     label = f"5 min Break: {mins:02d}:{secs:02d}" if st.session_state.break_phase == '5min' else f"10 min Break: {mins:02d}:{secs:02d}"
                     st.button(label, disabled=True, type="primary")
 
-            st.write("")
             col_txt_2, col_status_2, col_dummy = st.columns([1.5, 1.5, 1.0])
-            with col_txt_2:
-                st.markdown("**Aweigh diver**")
+            with col_txt_2: st.markdown("**Aweigh diver**")
             with col_status_2:
                 style_class = "status-box-green" if is_aweigh_avail else "status-box-red"
                 st.markdown(f'<div class="{style_class}">{aweigh_msg}</div>', unsafe_allow_html=True)
 
         live_timer_header()
         
-        st.write("")
-        st.write("")
+        st.write(""); st.write("")
         col_start_deco, col_end_dive = st.columns([1, 1])
-        
         with col_start_deco:
             if not st.session_state.deco_phase_active:
                 if st.button("Start Decompression", use_container_width=True):
                     if st.session_state.get('debug_manual_mode', False):
-                        current_mins = st.session_state.get('debug_manual_time', 0)
-                        current_secs_part = 0
+                        current_mins = st.session_state.get('debug_manual_time', 0); current_secs_part = 0
                     else:
                         total_elapsed = int(time.time() - st.session_state.start_time)
-                        current_mins = total_elapsed // 60
-                        current_secs_part = total_elapsed % 60
-                    
+                        current_mins = total_elapsed // 60; current_secs_part = total_elapsed % 60
                     st.session_state.locked_bottom_time_min = current_mins
                     st.session_state.locked_bottom_time_sec = current_secs_part
                     st.session_state.deco_start_time = time.time()
                     st.session_state.deco_phase_active = True
                     st.rerun()
-            else:
-                 st.info("Decompression Phase Active")
+            else: st.info("Decompression Phase Active")
 
         with col_end_dive:
             if st.button("End Dive", use_container_width=True):
                 now = time.time()
-                
                 start_dt = datetime.fromtimestamp(st.session_state.start_time)
-                
                 deco_str = ""
                 if st.session_state.deco_start_time:
                     deco_dt = datetime.fromtimestamp(st.session_state.deco_start_time)
                     deco_str = deco_dt.strftime("%H:%M")
-                
                 end_dt = datetime.fromtimestamp(now)
                 
                 st.session_state.logbook_context = {
@@ -642,85 +679,97 @@ def render_results_view(placeholder):
                     "start_time": start_dt.strftime("%H:%M"),
                     "depth": st.session_state.planned_depth,
                     "deco_start": deco_str,
-                    "end_time": end_dt.strftime("%H:%M")
+                    "end_time": end_dt.strftime("%H:%M"),
+                    "final_profile_id": st.session_state.active_profile_id_tracker
                 }
-                
                 st.session_state.page = 'logbook'
                 placeholder.empty()
                 st.rerun()
         
         with st.expander("🛠️ Debug Options"):
             chk_debug = st.checkbox("Enable Manual Time Override", key="debug_manual_mode")
-            if chk_debug:
-                st.number_input("Set Elapsed Time (minutes):", min_value=0, value=0, step=1, key="debug_manual_time")
-
+            if chk_debug: st.number_input("Set Elapsed Time (minutes):", min_value=0, value=0, step=1, key="debug_manual_time")
 
 def render_logbook_view(placeholder):
     data = st.session_state.logbook_context
+    entries = st.session_state.logbook_entries
+    profiles_df, stops_df = load_data()
     
     with placeholder.container():
         st.title("Raport z nurkowania (Logbook)")
-        
         st.markdown("---")
         
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.text_input("Lp.", value="1", disabled=True)
-        with c2:
-            st.text_input("Data", value=data.get('date', ''), disabled=True)
-        with c3:
-            st.text_input("Nazwisko i imię nurka")
-        with c4:
-            st.text_input("Rejon nurkowania / głębokość")
-
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.text_input("Rozpoczęcie zanurzania", value=data.get('start_time', ''))
-        with c2:
-            st.text_input("Osiągnięta głębokość", value=data.get('depth', ''))
-        with c3:
-            st.text_input("Rozpoczęcie wynurzania", value=data.get('deco_start', ''))
-        with c4:
-            st.text_input("Zamknięcie dzwonu")
-
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.text_input("Zakończenie wynurzania", value=data.get('end_time', ''))
-        with c2:
-            st.text_input("Ogólny czas dekompresji w wodzie")
-        with c3:
-            st.text_input("Ogólny czas dekompresji w komorze")
-        with c4:
-            st.text_input("Czas ogólny pobytu nurka pod wodą")
-
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.text_input("Czas ogólny pobytu nurka w komorze")
-        with c2:
-            st.text_input("Czynnik oddechowy")
-        with c3:
-            st.text_input("Rodzaj sprzętu nurkowego")
-
-        st.text_input("Potwierdzenie sprawdzenia sprzętu")
-        st.text_area("Rodzaj wykonanych prac / Informacje o dezynfekcji")
-
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.text_input("Stan morza")
-        with c2:
-            st.text_input("Temperatura wody")
-        with c3:
-            st.text_input("Temperatura pow.")
-        with c4:
-            st.text_input("Prąd wody")
-
-        st.text_input("Nazwisko i podpis kierownika prac oraz lekarza")
+        fig = generate_dive_profile_chart(data, profiles_df, stops_df)
+        if fig:
+            st.pyplot(fig)
+        else:
+            st.info("No decompression profile data available for graph generation.")
         
         st.markdown("---")
+
+        with st.form("diver_form"):
+            c1, c2, c3, c4 = st.columns(4)
+            with c1: st.text_input("Lp.", value=str(st.session_state.form_lp), disabled=True)
+            with c2: st.text_input("Data", value=data.get('date', ''), disabled=True)
+            with c3: nazwisko = st.text_input("Nazwisko i imię nurka", key="form_nazwisko")
+            with c4: rejon = st.text_input("Rejon nurkowania / głębokość", key="form_rejon")
+
+            c1, c2, c3, c4 = st.columns(4)
+            with c1: st.text_input("Rozpoczęcie zanurzania", value=data.get('start_time', ''), disabled=True)
+            with c2: st.text_input("Osiągnięta głębokość", value=str(data.get('depth', '')), disabled=True)
+            with c3: st.text_input("Rozpoczęcie wynurzania", value=data.get('deco_start', ''), disabled=True)
+            with c4: dzwon = st.text_input("Zamknięcie dzwonu", key="form_dzwon")
+
+            c1, c2, c3, c4 = st.columns(4)
+            with c1: st.text_input("Zakończenie wynurzania", value=data.get('end_time', ''), disabled=True)
+            with c2: czas_woda = st.text_input("Ogólny czas dekompresji w wodzie", key="form_czas_woda")
+            with c3: czas_komora = st.text_input("Ogólny czas dekompresji w komorze", key="form_czas_komora")
+            with c4: czas_ogolny = st.text_input("Czas ogólny pobytu nurka pod wodą", key="form_czas_ogolny")
+
+            c1, c2, c3 = st.columns(3)
+            with c1: czas_komora_pobyt = st.text_input("Czas ogólny pobytu nurka w komorze (pobyt)", key="form_czas_komora_pobyt")
+            with c2: czynnik = st.text_input("Czynnik oddechowy", key="form_czynnik")
+            with c3: sprzet = st.text_input("Rodzaj sprzętu nurkowego", key="form_sprzet")
+
+            sprawdzenie = st.text_input("Potwierdzenie sprawdzenia sprzętu", key="form_sprawdzenie")
+            uwagi = st.text_area("Rodzaj wykonanych prac / Informacje o dezynfekcji", key="form_uwagi")
+
+            c1, c2, c3, c4 = st.columns(4)
+            with c1: stan_morza = st.text_input("Stan morza", key="form_stan_morza")
+            with c2: temp_wody = st.text_input("Temperatura wody", key="form_temp_wody")
+            with c3: temp_pow = st.text_input("Temperatura pow.", key="form_temp_pow")
+            with c4: prad = st.text_input("Prąd wody", key="form_prad")
+
+            podpis = st.text_input("Nazwisko i podpis kierownika prac oraz lekarza", key="form_podpis")
+            
+            col_add, col_dummy = st.columns([1, 4])
+            with col_add:
+                submit_add = st.form_submit_button("Dodaj kolejnego nurka")
         
-        col_new, col_print = st.columns([1, 1])
-        with col_new:
-            if st.button("New Dive", type="primary", use_container_width=True):
+        if submit_add:
+            new_entry = {
+                "lp": st.session_state.form_lp, "data": data.get('date', ''), "nazwisko": nazwisko,
+                "rejon": rejon, "start_zanurzania": data.get('start_time', ''), "glebokosc": data.get('depth', ''),
+                "start_wynurzania": data.get('deco_start', ''), "zamkniecie_dzwonu": dzwon, "koniec_wynurzania": data.get('end_time', ''),
+                "czas_deco_woda": czas_woda, "czas_deco_komora": czas_komora, "czas_ogolny": czas_ogolny,
+                "czas_komora_pobyt": czas_komora_pobyt, "czynnik": czynnik, "sprzet": sprzet,
+                "sprawdzenie": sprawdzenie, "uwagi": uwagi, "stan_morza": stan_morza,
+                "temp_wody": temp_wody, "temp_pow": temp_pow, "prad": prad, "podpis": podpis
+            }
+            st.session_state.logbook_entries.append(new_entry)
+            st.session_state.form_lp += 1
+            st.rerun()
+
+        if entries:
+            st.markdown("### Dodani nurkowie")
+            preview_df = pd.DataFrame(entries)[['lp', 'nazwisko', 'czas_ogolny', 'sprzet']]
+            st.dataframe(preview_df)
+
+        st.markdown("---")
+        col_new_dive, col_pdf = st.columns([1, 1])
+        
+        with col_new_dive:
+            if st.button("New Dive Session (Reset)", type="secondary", use_container_width=True):
                 st.session_state.page = 'input'
                 st.session_state.safety_buffer_active = False
                 st.session_state.timer_5_start = None
@@ -737,19 +786,22 @@ def render_logbook_view(placeholder):
                 st.session_state.break_start_time = None
                 st.session_state.break_duration = 0
                 st.session_state.logbook_context = {}
+                st.session_state.logbook_entries = []
+                st.session_state.form_lp = 1
+                st.session_state.active_profile_id_tracker = None
                 placeholder.empty()
                 st.rerun()
-        with col_print:
-            st.button("Print / Save (Placeholder)", use_container_width=True, disabled=True)
+        with col_pdf:
+            if entries:
+                pdf_data = create_pdf(entries)
+                st.download_button("Pobierz Raport PDF", pdf_data, "raport_nurkowania.pdf", "application/pdf", use_container_width=True, type="primary")
+            else: st.warning("Dodaj przynajmniej jednego nurka aby pobrać PDF.")
 
 def main():
     main_placeholder = st.empty()
-    if st.session_state.page == 'input':
-        render_input_view(main_placeholder)
-    elif st.session_state.page == 'results':
-        render_results_view(main_placeholder)
-    elif st.session_state.page == 'logbook':
-        render_logbook_view(main_placeholder)
+    if st.session_state.page == 'input': render_input_view(main_placeholder)
+    elif st.session_state.page == 'results': render_results_view(main_placeholder)
+    elif st.session_state.page == 'logbook': render_logbook_view(main_placeholder)
 
 if __name__ == "__main__":
     main()
