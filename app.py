@@ -6,8 +6,10 @@ from datetime import datetime
 from fpdf import FPDF
 import matplotlib.pyplot as plt
 
+# --- PAGE CONFIG ---
 st.set_page_config(page_title="Diver Decompression Planner", layout="wide")
 
+# --- CUSTOM CSS ---
 st.markdown("""
 <style>
 div.scrolling-wrapper {
@@ -197,7 +199,6 @@ def calculate_profile_index(subset, elapsed_min, risk_active, is_longer):
 
 def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df, stops_df):
     profile_id = logbook_data.get('final_profile_id')
-    planned_depth = logbook_data.get('depth', 0)
     break_events = logbook_data.get('break_events', []) 
     pre_deco_break = logbook_data.get('pre_deco_break', False)
     
@@ -205,6 +206,7 @@ def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df,
         return None
 
     row = profiles_df[profiles_df['profile_id'] == profile_id].iloc[0]
+    plot_depth = row['dive_depth_m']
     my_stops = stops_df[stops_df['profile_id'] == profile_id].sort_values('stop_depth_m', ascending=False)
     ascent_to_1st = row['ascent_to_1st_stop_min']
     
@@ -212,7 +214,7 @@ def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df,
     curr_x, curr_y = 0, 0
     
     descent_t = 2
-    next_x, next_y = curr_x + descent_t, planned_depth
+    next_x, next_y = curr_x + descent_t, plot_depth
     ax.plot([curr_x, next_x], [curr_y, next_y], color='black', linewidth=2)
     curr_x, curr_y = next_x, next_y
     
@@ -224,19 +226,15 @@ def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df,
         next_x, next_y = curr_x + 1, 0
         ax.plot([curr_x, next_x], [curr_y, next_y], color='black', linewidth=2, linestyle=':')
         curr_x, curr_y = next_x, next_y
-        
         next_x = curr_x + 5
         ax.plot([curr_x, next_x], [curr_y, curr_y], color='black', linewidth=2)
         curr_x = next_x
-        
-        next_x, next_y = curr_x + 1, planned_depth
+        next_x, next_y = curr_x + 1, plot_depth
         ax.plot([curr_x, next_x], [curr_y, next_y], color='black', linewidth=2, linestyle=':')
         curr_x, curr_y = next_x, next_y
-        
-        d_o2_check = calculate_o2_time(10, planned_depth)
+        d_o2_check = calculate_o2_time(10, plot_depth)
         is_o2_flush = (used_o2 and d_o2_check is not None)
         color_flush = '#00BFFF' if is_o2_flush else 'black'
-        
         next_x = curr_x + 10
         ax.plot([curr_x, next_x], [curr_y, curr_y], color=color_flush, linewidth=3 if is_o2_flush else 2)
         curr_x = next_x
@@ -249,7 +247,6 @@ def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df,
     if not my_stops.empty:
         for i, (_, stop) in enumerate(my_stops.iterrows()):
             depth = stop['stop_depth_m']
-            
             if curr_y > depth:
                 next_x, next_y = curr_x + 1, depth
                 ax.plot([curr_x, next_x], [curr_y, next_y], color='black', linewidth=2)
@@ -294,14 +291,11 @@ def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df,
     ax.invert_yaxis()
     ax.set_xlabel("Czas (min)")
     ax.set_ylabel("Głębokość (m)")
-    
     if used_o2:
         ax.plot([], [], color='#00BFFF', linewidth=3, label='Dekompresja Tlenowa')
         ax.legend(loc='lower right')
-
-    ax.set_title(f"Profil Nurkowania [Głębokość: {planned_depth}m | Czas Dna: {bt_end:.1f} min]")
+    ax.set_title(f"Profil Nurkowania [Głębokość Tabeli: {plot_depth}m | Czas Dna: {bt_end:.1f} min]")
     ax.grid(True, which='both', linestyle='--', alpha=0.7)
-    
     return fig
 
 def create_pdf(entries):
@@ -332,6 +326,11 @@ if 'deco_phase_active' not in st.session_state: st.session_state.deco_phase_acti
 if 'deco_start_time' not in st.session_state: st.session_state.deco_start_time = None
 if 'locked_bottom_time_min' not in st.session_state: st.session_state.locked_bottom_time_min = 0
 if 'locked_bottom_time_sec' not in st.session_state: st.session_state.locked_bottom_time_sec = 0
+
+if 'locked_plan_name' not in st.session_state: st.session_state.locked_plan_name = None
+if 'locked_profile_id' not in st.session_state: st.session_state.locked_profile_id = None
+if 'current_selection_name' not in st.session_state: st.session_state.current_selection_name = "Current Plan"
+
 if 'deco_step_index' not in st.session_state: st.session_state.deco_step_index = 0
 if 'deco_step_progress_air_sec' not in st.session_state: st.session_state.deco_step_progress_air_sec = 0.0
 if 'deco_last_tick' not in st.session_state: st.session_state.deco_last_tick = None
@@ -364,6 +363,11 @@ def render_input_view(placeholder):
             st.session_state.debug_manual_mode = False; st.session_state.debug_manual_time = 0
             st.session_state.deco_phase_active = False; st.session_state.deco_start_time = None
             st.session_state.locked_bottom_time_min = 0; st.session_state.locked_bottom_time_sec = 0
+            
+            st.session_state.locked_plan_name = None
+            st.session_state.locked_profile_id = None
+            st.session_state.current_selection_name = "Current Plan"
+            
             st.session_state.deco_step_index = 0; st.session_state.deco_step_progress_air_sec = 0.0
             st.session_state.deco_last_tick = None; st.session_state.deco_o2_enabled = False
             st.session_state.break_phase = None; st.session_state.break_start_time = None; st.session_state.break_duration = 0
@@ -408,16 +412,30 @@ def render_results_view(placeholder):
             with c4: st.metric("PROFILE", current_profile_str, delta="Safety (+1)" if safety_visual else None)
             st.divider()
 
+            is_plan_locked = st.session_state.deco_phase_active or st.session_state.pre_deco_break_occurred
+
             col_menu, col_o2 = st.columns([3, 1])
-            with col_menu: st.markdown("### Next Stops Plan"); scenario_options = ["Current Plan", "Deeper", "Longer", "Deeper & Longer"]; selection = st.radio("Select Scenario:", scenario_options, index=0, horizontal=True, label_visibility="collapsed")
-            with col_o2: st.markdown("### "); st.session_state.deco_o2_enabled = st.checkbox("Using Oxygen", value=st.session_state.deco_o2_enabled)
+            with col_menu: 
+                st.markdown("### Next Stops Plan")
+                
+                if is_plan_locked:
+                    st.markdown(f"<div style='padding: 5px 10px; margin-bottom: 10px; border-radius: 5px; background-color: #e8f5e9; border: 1px solid #00CC66; color: #00CC66; font-size: 0.9rem;'><strong>Aktywny plan w tle:</strong> {st.session_state.locked_plan_name}</div>", unsafe_allow_html=True)
+                
+                scenario_options = ["Current Plan", "Deeper", "Longer", "Deeper & Longer"]
+                selection = st.radio("Select Scenario:", scenario_options, horizontal=True, label_visibility="collapsed", key="scenario_radio")
+            
+            with col_o2: 
+                st.markdown("### ") 
+                st.session_state.deco_o2_enabled = st.checkbox("Using Oxygen", value=st.session_state.deco_o2_enabled)
 
             target_profile_id = None
             if selection == "Current Plan": target_idx = calculate_profile_index(current_subset, calculation_time_min, risk_active, is_longer=False); target_profile_id = current_subset.iloc[target_idx]['profile_id'] if target_idx != -1 else None
             elif selection == "Longer": target_idx = calculate_profile_index(current_subset, calculation_time_min, risk_active, is_longer=True); target_profile_id = current_subset.iloc[target_idx]['profile_id'] if target_idx != -1 else None
             elif selection == "Deeper": next_depth = get_next_depth(current_table_depth, profiles_df); deep_subset = profiles_df[profiles_df['dive_depth_m'] == next_depth].sort_values('bottom_time_min'); target_idx = calculate_profile_index(deep_subset, calculation_time_min, risk_active, is_longer=False); target_profile_id = deep_subset.iloc[target_idx]['profile_id'] if target_idx != -1 else None
             elif selection == "Deeper & Longer": next_depth = get_next_depth(current_table_depth, profiles_df); deep_subset = profiles_df[profiles_df['dive_depth_m'] == next_depth].sort_values('bottom_time_min'); target_idx = calculate_profile_index(deep_subset, calculation_time_min, risk_active, is_longer=True); target_profile_id = deep_subset.iloc[target_idx]['profile_id'] if target_idx != -1 else None
+
             st.session_state.active_profile_id_tracker = target_profile_id
+            st.session_state.current_selection_name = selection 
 
             is_break_active = False
             if st.session_state.break_phase is not None:
@@ -435,15 +453,18 @@ def render_results_view(placeholder):
                         st.rerun()
 
             active_profile_steps = []
-            if target_profile_id is not None:
-                stops_main = stops_df[stops_df['profile_id'] == target_profile_id].sort_values('stop_depth_m', ascending=False)
-                row_main = profiles_df[profiles_df['profile_id'] == target_profile_id].iloc[0]
+            
+            tick_profile_id = st.session_state.locked_profile_id if is_plan_locked else target_profile_id
+
+            if tick_profile_id is not None:
+                stops_main = stops_df[stops_df['profile_id'] == tick_profile_id].sort_values('stop_depth_m', ascending=False)
+                row_main = profiles_df[profiles_df['profile_id'] == tick_profile_id].iloc[0]
                 active_profile_steps.append({'type': 'ascent', 'depth': 0, 'air_sec': row_main['ascent_to_1st_stop_min'] * 60, 'o2_sec': None})
                 for _, stop in stops_main.iterrows():
                     d_air_min = stop['duration_air_min']; d_o2_min = calculate_o2_time(d_air_min, stop['stop_depth_m'])
                     active_profile_steps.append({'type': 'stop', 'depth': stop['stop_depth_m'], 'air_sec': d_air_min * 60, 'o2_sec': d_o2_min * 60 if d_o2_min else None})
 
-            if st.session_state.deco_phase_active and target_profile_id is not None and active_profile_steps:
+            if st.session_state.deco_phase_active and tick_profile_id is not None and active_profile_steps:
                 last_tick = st.session_state.deco_last_tick
                 if last_tick is None: st.session_state.deco_last_tick = current_timestamp
                 else:
@@ -464,12 +485,21 @@ def render_results_view(placeholder):
                                     end_dt = datetime.fromtimestamp(now)
                                     if st.session_state.locked_bottom_time_min > 0 or st.session_state.locked_bottom_time_sec > 0: actual_bot = st.session_state.locked_bottom_time_min + (st.session_state.locked_bottom_time_sec / 60.0)
                                     else: actual_bot = (now - st.session_state.start_time) / 60.0
-                                    st.session_state.logbook_context = {"date": start_dt.strftime("%Y-%m-%d"), "start_time": start_dt.strftime("%H:%M"), "depth": st.session_state.planned_depth, "deco_start": deco_str, "end_time": end_dt.strftime("%H:%M"), "final_profile_id": st.session_state.active_profile_id_tracker, "actual_bottom_time_min": actual_bot, "used_o2": st.session_state.deco_o2_enabled, "break_events": st.session_state.break_events, "pre_deco_break": st.session_state.pre_deco_break_occurred}
+                                    st.session_state.logbook_context = {"date": start_dt.strftime("%Y-%m-%d"), "start_time": start_dt.strftime("%H:%M"), "depth": st.session_state.planned_depth, "deco_start": deco_str, "end_time": end_dt.strftime("%H:%M"), "final_profile_id": st.session_state.locked_profile_id, "actual_bottom_time_min": actual_bot, "used_o2": st.session_state.deco_o2_enabled, "break_events": st.session_state.break_events, "pre_deco_break": st.session_state.pre_deco_break_occurred}
                                     st.session_state.page = 'logbook'; st.rerun()
             
             if target_profile_id is not None:
                 target_row = profiles_df[profiles_df['profile_id'] == target_profile_id].iloc[0]
-                st.markdown(f"**Plan:** {selection} | **Profile:** {target_row['dive_depth_m']} / {target_row['bottom_time_min']}")
+                
+                is_currently_locked = (is_plan_locked and target_profile_id == st.session_state.locked_profile_id)
+                
+                if is_currently_locked:
+                    plan_str = f"<span style='color: #00CC66; font-weight: bold;'>{selection} (AKTYWNY)</span>"
+                else:
+                    plan_str = selection
+                    
+                st.markdown(f"**Plan:** {plan_str} | **Profile:** {target_row['dive_depth_m']} / {target_row['bottom_time_min']}", unsafe_allow_html=True)
+                
                 vis_stops = stops_df[stops_df['profile_id'] == target_profile_id].sort_values('stop_depth_m', ascending=False)
                 vis_steps = []
                 vis_steps.append({'label_depth': "Ascent to 1st stop", 'label_time': f"{target_row['ascent_to_1st_stop_min']} min", 'air_min': target_row['ascent_to_1st_stop_min'], 'o2_min': None})
@@ -481,10 +511,13 @@ def render_results_view(placeholder):
                 cards_html = '<div class="scrolling-wrapper">'
                 for i, step in enumerate(vis_steps):
                     is_active = False; is_done = False; is_paused = False
-                    if st.session_state.deco_phase_active:
+                    
+                    if is_currently_locked and st.session_state.deco_phase_active:
                         if i < st.session_state.deco_step_index: is_done = True
                         elif i == st.session_state.deco_step_index: is_active = True; is_paused = is_break_active
+                    
                     content_html = f'<div class="card-time">{step["label_time"]}</div><div class="card-depth">{step["label_depth"]}</div>'
+                    
                     if is_active:
                         if is_paused: content_html += '<div class="card-paused-text">PAUSED (Break)</div>'
                         else:
@@ -506,16 +539,12 @@ def render_results_view(placeholder):
             st.divider()
 
             st.subheader("Adjust Depth")
-            
-            is_depth_locked = st.session_state.deco_phase_active or (st.session_state.break_phase is not None) or st.session_state.pre_deco_break_occurred
-            
+            is_depth_locked = is_plan_locked
             col_in, col_btn = st.columns([3, 1])
-            with col_in: 
-                new_depth = st.number_input("New Depth (m):", value=st.session_state.planned_depth, step=1, key="adjust_depth_input", disabled=is_depth_locked)
+            with col_in: new_depth = st.number_input("New Depth (m):", value=st.session_state.planned_depth, step=1, key="adjust_depth_input", disabled=is_depth_locked)
             with col_btn: 
                 st.write(" "); 
-                if st.button("Apply Changes", use_container_width=True, disabled=is_depth_locked): 
-                    st.session_state.planned_depth = new_depth; st.rerun()
+                if st.button("Apply Changes", use_container_width=True, disabled=is_depth_locked): st.session_state.planned_depth = new_depth; st.rerun()
 
             st.write("") 
             chamber_msg = "Not available"; is_chamber_avail = False; aweigh_msg = "Not Available"; is_aweigh_avail = False
@@ -538,7 +567,7 @@ def render_results_view(placeholder):
                 if st.session_state.break_phase is None:
                     if st.button("Start 5' Break"):
                         st.session_state.break_phase = '5min'; st.session_state.break_duration = 300; st.session_state.break_start_time = time.time()
-                        st.session_state.deco_o2_enabled = True
+                        st.session_state.deco_o2_enabled = True 
                         if st.session_state.deco_phase_active:
                             st.session_state.break_events.append(st.session_state.deco_step_index)
                         else:
@@ -546,6 +575,9 @@ def render_results_view(placeholder):
                             else: te = int(time.time() - st.session_state.start_time); cm = te // 60; cs = te % 60
                             st.session_state.locked_bottom_time_min = cm; st.session_state.locked_bottom_time_sec = cs
                             st.session_state.pre_deco_break_occurred = True
+                            
+                            st.session_state.locked_plan_name = st.session_state.current_selection_name
+                            st.session_state.locked_profile_id = st.session_state.active_profile_id_tracker
                         st.rerun()
                 else:
                     elapsed = time.time() - st.session_state.break_start_time; remaining = max(0, st.session_state.break_duration - elapsed)
@@ -562,6 +594,7 @@ def render_results_view(placeholder):
         
         st.write(""); st.write("")
         col_start_deco, col_end_dive = st.columns([1, 1])
+        
         with col_start_deco:
             btn_disabled = (st.session_state.break_phase is not None)
             if not st.session_state.deco_phase_active:
@@ -569,19 +602,42 @@ def render_results_view(placeholder):
                     if st.session_state.get('debug_manual_mode', False): cm = st.session_state.get('debug_manual_time', 0); cs = 0
                     else: te = int(time.time() - st.session_state.start_time); cm = te // 60; cs = te % 60
                     st.session_state.locked_bottom_time_min = cm; st.session_state.locked_bottom_time_sec = cs
-                    st.session_state.deco_start_time = time.time(); st.session_state.deco_phase_active = True; st.rerun()
-            else: st.info("Decompression Phase Active")
+                    st.session_state.deco_start_time = time.time()
+                    st.session_state.deco_phase_active = True
+                    
+                    st.session_state.locked_plan_name = st.session_state.current_selection_name
+                    st.session_state.locked_profile_id = st.session_state.active_profile_id_tracker
+                    
+                    st.rerun()
+            else: 
+                st.info("Decompression Phase Active")
 
         with col_end_dive:
             if st.button("End Dive", use_container_width=True):
                 now = time.time(); start_dt = datetime.fromtimestamp(st.session_state.start_time); deco_str = ""
                 if st.session_state.deco_start_time: deco_str = datetime.fromtimestamp(st.session_state.deco_start_time).strftime("%H:%M")
                 end_dt = datetime.fromtimestamp(now)
-                if st.session_state.locked_bottom_time_min > 0 or st.session_state.locked_bottom_time_sec > 0: actual_bot = st.session_state.locked_bottom_time_min + (st.session_state.locked_bottom_time_sec / 60.0)
+                
+                if st.session_state.locked_bottom_time_min > 0 or st.session_state.locked_bottom_time_sec > 0: 
+                    actual_bot = st.session_state.locked_bottom_time_min + (st.session_state.locked_bottom_time_sec / 60.0)
                 else:
                     if st.session_state.get('debug_manual_mode', False): actual_bot = float(st.session_state.get('debug_manual_time', 0))
                     else: actual_bot = int(now - st.session_state.start_time) / 60.0
-                st.session_state.logbook_context = {"date": start_dt.strftime("%Y-%m-%d"), "start_time": start_dt.strftime("%H:%M"), "depth": st.session_state.planned_depth, "deco_start": deco_str, "end_time": end_dt.strftime("%H:%M"), "final_profile_id": st.session_state.active_profile_id_tracker, "actual_bottom_time_min": actual_bot, "used_o2": st.session_state.deco_o2_enabled, "break_events": st.session_state.break_events, "pre_deco_break": st.session_state.pre_deco_break_occurred}
+                
+                final_id = st.session_state.locked_profile_id if st.session_state.locked_profile_id else st.session_state.active_profile_id_tracker
+                
+                st.session_state.logbook_context = {
+                    "date": start_dt.strftime("%Y-%m-%d"), 
+                    "start_time": start_dt.strftime("%H:%M"), 
+                    "depth": st.session_state.planned_depth, 
+                    "deco_start": deco_str, 
+                    "end_time": end_dt.strftime("%H:%M"), 
+                    "final_profile_id": final_id, 
+                    "actual_bottom_time_min": actual_bot, 
+                    "used_o2": st.session_state.deco_o2_enabled, 
+                    "break_events": st.session_state.break_events, 
+                    "pre_deco_break": st.session_state.pre_deco_break_occurred
+                }
                 st.session_state.page = 'logbook'; placeholder.empty(); st.rerun()
         
         with st.expander("🛠️ Debug Options"):
@@ -607,6 +663,13 @@ def render_logbook_view(placeholder):
         st.markdown("---")
 
         with st.form("diver_form"):
+            
+            final_id_for_form = data.get('final_profile_id')
+            if final_id_for_form is not None and not profiles_df.empty:
+                table_depth_for_form = profiles_df[profiles_df['profile_id'] == final_id_for_form].iloc[0]['dive_depth_m']
+            else:
+                table_depth_for_form = data.get('depth', '')
+
             c1, c2, c3, c4 = st.columns(4)
             with c1: st.text_input("Lp.", value=str(st.session_state.form_lp), disabled=True)
             with c2: st.text_input("Data", value=data.get('date', ''), disabled=True)
@@ -614,7 +677,7 @@ def render_logbook_view(placeholder):
             with c4: rejon = st.text_input("Rejon nurkowania / głębokość", key="form_rejon")
             c1, c2, c3, c4 = st.columns(4)
             with c1: st.text_input("Rozpoczęcie zanurzania", value=data.get('start_time', ''), disabled=True)
-            with c2: st.text_input("Osiągnięta głębokość", value=str(data.get('depth', '')), disabled=True)
+            with c2: st.text_input("Osiągnięta głębokość", value=str(table_depth_for_form), disabled=True)
             with c3: st.text_input("Rozpoczęcie wynurzania", value=data.get('deco_start', ''), disabled=True)
             with c4: dzwon = st.text_input("Zamknięcie dzwonu", key="form_dzwon")
             c1, c2, c3, c4 = st.columns(4)
@@ -638,7 +701,7 @@ def render_logbook_view(placeholder):
             with col_add: submit_add = st.form_submit_button("Dodaj kolejnego nurka")
         
         if submit_add:
-            new_entry = {"lp": st.session_state.form_lp, "data": data.get('date', ''), "nazwisko": nazwisko, "rejon": rejon, "start_zanurzania": data.get('start_time', ''), "glebokosc": data.get('depth', ''), "start_wynurzania": data.get('deco_start', ''), "zamkniecie_dzwonu": dzwon, "koniec_wynurzania": data.get('end_time', ''), "czas_deco_woda": czas_woda, "czas_deco_komora": czas_komora, "czas_ogolny": czas_ogolny, "czas_komora_pobyt": czas_komora_pobyt, "czynnik": czynnik, "sprzet": sprzet, "sprawdzenie": sprawdzenie, "uwagi": uwagi, "stan_morza": stan_morza, "temp_wody": temp_wody, "temp_pow": temp_pow, "prad": prad, "podpis": podpis}
+            new_entry = {"lp": st.session_state.form_lp, "data": data.get('date', ''), "nazwisko": nazwisko, "rejon": rejon, "start_zanurzania": data.get('start_time', ''), "glebokosc": table_depth_for_form, "start_wynurzania": data.get('deco_start', ''), "zamkniecie_dzwonu": dzwon, "koniec_wynurzania": data.get('end_time', ''), "czas_deco_woda": czas_woda, "czas_deco_komora": czas_komora, "czas_ogolny": czas_ogolny, "czas_komora_pobyt": czas_komora_pobyt, "czynnik": czynnik, "sprzet": sprzet, "sprawdzenie": sprawdzenie, "uwagi": uwagi, "stan_morza": stan_morza, "temp_wody": temp_wody, "temp_pow": temp_pow, "prad": prad, "podpis": podpis}
             st.session_state.logbook_entries.append(new_entry); st.session_state.form_lp += 1; st.rerun()
 
         if entries:
@@ -649,6 +712,7 @@ def render_logbook_view(placeholder):
         with col_new_dive:
             if st.button("New Dive Session (Reset)", type="secondary", use_container_width=True):
                 st.session_state.page = 'input'; st.session_state.safety_buffer_active = False; st.session_state.timer_5_start = None; st.session_state.timer_10_start = None; st.session_state.deco_phase_active = False; st.session_state.deco_start_time = None; st.session_state.locked_bottom_time_min = 0; st.session_state.locked_bottom_time_sec = 0; st.session_state.deco_step_index = 0; st.session_state.deco_step_progress_air_sec = 0.0; st.session_state.deco_last_tick = None; st.session_state.deco_o2_enabled = False; st.session_state.break_phase = None; st.session_state.break_start_time = None; st.session_state.break_duration = 0; st.session_state.break_events = []; st.session_state.pre_deco_break_occurred = False; st.session_state.logbook_context = {}; st.session_state.logbook_entries = []; st.session_state.form_lp = 1; st.session_state.active_profile_id_tracker = None
+                st.session_state.locked_plan_name = None; st.session_state.locked_profile_id = None
                 placeholder.empty(); st.rerun()
         with col_pdf:
             if entries:
