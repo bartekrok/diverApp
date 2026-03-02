@@ -6,10 +6,8 @@ from datetime import datetime
 from fpdf import FPDF
 import matplotlib.pyplot as plt
 
-# --- PAGE CONFIG ---
 st.set_page_config(page_title="Diver Decompression Planner", layout="wide")
 
-# --- CUSTOM CSS ---
 st.markdown("""
 <style>
 div.scrolling-wrapper {
@@ -222,7 +220,6 @@ def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df,
     ax.plot([curr_x, bt_end], [curr_y, curr_y], color='black', linewidth=2)
     curr_x = bt_end
     
-
     if pre_deco_break:
         next_x, next_y = curr_x + 1, 0
         ax.plot([curr_x, next_x], [curr_y, next_y], color='black', linewidth=2, linestyle=':')
@@ -348,7 +345,6 @@ if 'logbook_context' not in st.session_state: st.session_state.logbook_context =
 if 'logbook_entries' not in st.session_state: st.session_state.logbook_entries = []
 if 'form_lp' not in st.session_state: st.session_state.form_lp = 1
 if 'active_profile_id_tracker' not in st.session_state: st.session_state.active_profile_id_tracker = None
-
 
 def render_input_view(placeholder):
     with placeholder.container():
@@ -509,12 +505,20 @@ def render_results_view(placeholder):
             
             st.divider()
 
+            st.subheader("Adjust Depth")
+            
+            is_depth_locked = st.session_state.deco_phase_active or (st.session_state.break_phase is not None) or st.session_state.pre_deco_break_occurred
+            
             col_in, col_btn = st.columns([3, 1])
-            with col_in: new_depth = st.number_input("New Depth (m):", value=st.session_state.planned_depth, step=1, key="adjust_depth_input")
-            with col_btn: st.write(" "); 
-            if st.button("Apply Changes", use_container_width=True): st.session_state.planned_depth = new_depth; st.rerun()
+            with col_in: 
+                new_depth = st.number_input("New Depth (m):", value=st.session_state.planned_depth, step=1, key="adjust_depth_input", disabled=is_depth_locked)
+            with col_btn: 
+                st.write(" "); 
+                if st.button("Apply Changes", use_container_width=True, disabled=is_depth_locked): 
+                    st.session_state.planned_depth = new_depth; st.rerun()
 
-            st.write(""); chamber_msg = "Not available"; is_chamber_avail = False; aweigh_msg = "Not Available"; is_aweigh_avail = False
+            st.write("") 
+            chamber_msg = "Not available"; is_chamber_avail = False; aweigh_msg = "Not Available"; is_aweigh_avail = False
             if target_profile_id is not None:
                 target_stops = stops_df[stops_df['profile_id'] == target_profile_id]
                 eligible_stops = target_stops[target_stops['can_enter_chamber'] == 1]
