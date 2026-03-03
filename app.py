@@ -6,10 +6,8 @@ from datetime import datetime
 from fpdf import FPDF
 import matplotlib.pyplot as plt
 
-# --- PAGE CONFIG ---
 st.set_page_config(page_title="Diver Decompression Planner", layout="wide")
 
-# --- CUSTOM CSS ---
 st.markdown("""
 <style>
 div.scrolling-wrapper {
@@ -182,7 +180,7 @@ def calculate_o2_time(air_time, depth):
 
 def calculate_profile_index(subset, elapsed_min, risk_active, is_longer):
     if subset.empty: return -1
-    valid_times = subset[subset['bottom_time_min'] >= elapsed_min]
+    valid_times = subset[subset['bottom_time_min'] > elapsed_min]
     if not valid_times.empty:
         base_idx = subset.index.get_loc(valid_times.index[0])
     else:
@@ -196,6 +194,19 @@ def calculate_profile_index(subset, elapsed_min, risk_active, is_longer):
         final_idx = len(subset) - 1
         
     return final_idx
+
+def sanitize_pl(text):
+    """Converts Polish characters to Latin equivalents for FPDF compatibility"""
+    if text is None:
+        return ""
+    text = str(text)
+    repls = {
+        'ą':'a', 'ć':'c', 'ę':'e', 'ł':'l', 'ń':'n', 'ó':'o', 'ś':'s', 'ź':'z', 'ż':'z',
+        'Ą':'A', 'Ć':'C', 'Ę':'E', 'Ł':'L', 'Ń':'N', 'Ó':'O', 'Ś':'S', 'Ź':'Z', 'Ż':'Z'
+    }
+    for k, v in repls.items():
+        text = text.replace(k, v)
+    return text
 
 def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df, stops_df):
     profile_id = logbook_data.get('final_profile_id')
@@ -310,10 +321,20 @@ def create_pdf(entries):
     for header, width in headers: pdf.cell(width, line_height, header, 1, 0, 'C')
     pdf.ln()
     pdf.set_font("Arial", '', 5)
+    
+    keys_in_order = [
+        "lp", "data", "nazwisko", "rejon", "start_zanurzania", "glebokosc", 
+        "start_wynurzania", "zamkniecie_dzwonu", "koniec_wynurzania", "czas_deco_woda", 
+        "czas_deco_komora", "czas_ogolny", "czas_komora_pobyt", "czynnik", "sprzet", 
+        "sprawdzenie", "uwagi", "stan_morza", "temp_wody", "temp_pow", "prad", "podpis"
+    ]
+    
     for row in entries:
-        data_values = [str(row.get("lp", "")), str(row.get("data", "")), str(row.get("nazwisko", "")),str(row.get("rejon", "")), str(row.get("start_zanurzania", "")), str(row.get("glebokosc", "")),str(row.get("start_wynurzania", "")), str(row.get("zamkniecie_dzwonu", "")), str(row.get("koniec_wynurzania", "")),str(row.get("czas_deco_woda", "")), str(row.get("czas_deco_komora", "")), str(row.get("czas_ogolny", "")),str(row.get("czas_komora_pobyt", "")), str(row.get("czynnik", "")), str(row.get("sprzet", "")),str(row.get("sprawdzenie", "")), str(row.get("uwagi", "")), str(row.get("stan_morza", "")),str(row.get("temp_wody", "")), str(row.get("temp_pow", "")), str(row.get("prad", "")),str(row.get("podpis", ""))]
+        data_values = [sanitize_pl(row.get(key, "")) for key in keys_in_order]
         for i, value in enumerate(data_values):
-            width = headers[i][1]; max_len = int(width * 2.5); display_text = (value[:max_len] + '..') if len(value) > max_len else value
+            width = headers[i][1]
+            max_len = int(width * 2.5) 
+            display_text = (value[:max_len] + '..') if len(value) > max_len else value
             pdf.cell(width, line_height, display_text, 1, 0, 'C')
         pdf.ln()
     return pdf.output(dest='S').encode('latin-1', 'replace')
@@ -340,6 +361,8 @@ if 'break_start_time' not in st.session_state: st.session_state.break_start_time
 if 'break_duration' not in st.session_state: st.session_state.break_duration = 0
 if 'break_events' not in st.session_state: st.session_state.break_events = []
 if 'pre_deco_break_occurred' not in st.session_state: st.session_state.pre_deco_break_occurred = False
+if 'break_used_in_this_dive' not in st.session_state: st.session_state.break_used_in_this_dive = False
+
 if 'logbook_context' not in st.session_state: st.session_state.logbook_context = {}
 if 'logbook_entries' not in st.session_state: st.session_state.logbook_entries = []
 if 'form_lp' not in st.session_state: st.session_state.form_lp = 1
@@ -372,6 +395,7 @@ def render_input_view(placeholder):
             st.session_state.deco_last_tick = None; st.session_state.deco_o2_enabled = False
             st.session_state.break_phase = None; st.session_state.break_start_time = None; st.session_state.break_duration = 0
             st.session_state.break_events = []; st.session_state.pre_deco_break_occurred = False
+            st.session_state.break_used_in_this_dive = False
             st.session_state.logbook_context = {}; st.session_state.logbook_entries = []; st.session_state.form_lp = 1
             st.session_state.active_profile_id_tracker = None
             placeholder.empty(); st.rerun()
@@ -565,20 +589,25 @@ def render_results_view(placeholder):
                 else: st.markdown(f'<div class="chamber-unavailable-box">{chamber_msg}</div>', unsafe_allow_html=True)
             with col_t_break:
                 if st.session_state.break_phase is None:
-                    if st.button("Start 5' Break"):
-                        st.session_state.break_phase = '5min'; st.session_state.break_duration = 300; st.session_state.break_start_time = time.time()
-                        st.session_state.deco_o2_enabled = True 
-                        if st.session_state.deco_phase_active:
-                            st.session_state.break_events.append(st.session_state.deco_step_index)
-                        else:
-                            if st.session_state.get('debug_manual_mode', False): cm = st.session_state.get('debug_manual_time', 0); cs = 0
-                            else: te = int(time.time() - st.session_state.start_time); cm = te // 60; cs = te % 60
-                            st.session_state.locked_bottom_time_min = cm; st.session_state.locked_bottom_time_sec = cs
-                            st.session_state.pre_deco_break_occurred = True
+                    if not st.session_state.get('break_used_in_this_dive', False):
+                        if st.button("Start 5' Break"):
+                            st.session_state.break_phase = '5min'; st.session_state.break_duration = 300; st.session_state.break_start_time = time.time()
+                            st.session_state.deco_o2_enabled = True 
+                            st.session_state.break_used_in_this_dive = True
                             
-                            st.session_state.locked_plan_name = st.session_state.current_selection_name
-                            st.session_state.locked_profile_id = st.session_state.active_profile_id_tracker
-                        st.rerun()
+                            if st.session_state.deco_phase_active:
+                                st.session_state.break_events.append(st.session_state.deco_step_index)
+                            else:
+                                if st.session_state.get('debug_manual_mode', False): cm = st.session_state.get('debug_manual_time', 0); cs = 0
+                                else: te = int(time.time() - st.session_state.start_time); cm = te // 60; cs = te % 60
+                                st.session_state.locked_bottom_time_min = cm; st.session_state.locked_bottom_time_sec = cs
+                                st.session_state.pre_deco_break_occurred = True
+                                
+                                st.session_state.locked_plan_name = st.session_state.current_selection_name
+                                st.session_state.locked_profile_id = st.session_state.active_profile_id_tracker
+                            st.rerun()
+                    else:
+                        st.button("Start 5' Break", disabled=True, help="Przerwa została już użyta podczas tego nurkowania.")
                 else:
                     elapsed = time.time() - st.session_state.break_start_time; remaining = max(0, st.session_state.break_duration - elapsed)
                     mins = int(remaining // 60); secs = int(remaining % 60)
@@ -713,6 +742,7 @@ def render_logbook_view(placeholder):
             if st.button("New Dive Session (Reset)", type="secondary", use_container_width=True):
                 st.session_state.page = 'input'; st.session_state.safety_buffer_active = False; st.session_state.timer_5_start = None; st.session_state.timer_10_start = None; st.session_state.deco_phase_active = False; st.session_state.deco_start_time = None; st.session_state.locked_bottom_time_min = 0; st.session_state.locked_bottom_time_sec = 0; st.session_state.deco_step_index = 0; st.session_state.deco_step_progress_air_sec = 0.0; st.session_state.deco_last_tick = None; st.session_state.deco_o2_enabled = False; st.session_state.break_phase = None; st.session_state.break_start_time = None; st.session_state.break_duration = 0; st.session_state.break_events = []; st.session_state.pre_deco_break_occurred = False; st.session_state.logbook_context = {}; st.session_state.logbook_entries = []; st.session_state.form_lp = 1; st.session_state.active_profile_id_tracker = None
                 st.session_state.locked_plan_name = None; st.session_state.locked_profile_id = None
+                st.session_state.break_used_in_this_dive = False
                 placeholder.empty(); st.rerun()
         with col_pdf:
             if entries:
