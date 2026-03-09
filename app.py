@@ -6,8 +6,10 @@ from datetime import datetime
 from fpdf import FPDF
 import matplotlib.pyplot as plt
 
+# --- PAGE CONFIG ---
 st.set_page_config(page_title="Diver Decompression Planner", layout="wide")
 
+# --- CUSTOM CSS ---
 st.markdown("""
 <style>
 div.scrolling-wrapper {
@@ -147,15 +149,42 @@ div[role="radiogroup"] {
 </style>
 """, unsafe_allow_html=True)
 
+def parse_us_time(val):
+    if pd.isna(val): return 0.0
+    val_str = str(val).strip()
+    if ':' in val_str:
+        parts = val_str.split(':')
+        return float(parts[0]) + float(parts[1])/60.0
+    return float(val_str)
+
 @st.cache_data
 def load_data():
     try:
         profiles = pd.read_csv('dive_profiles.csv')
         stops = pd.read_csv('deco_stops.csv')
-        return profiles, stops
     except FileNotFoundError:
         st.error("CSV files not found. Please ensure 'dive_profiles.csv' and 'deco_stops.csv' are in the app folder.")
-        return pd.DataFrame(), pd.DataFrame()
+        profiles, stops = pd.DataFrame(), pd.DataFrame()
+        
+    try:
+        p_us = pd.read_csv('dive_profiles_us.csv')
+        s_us = pd.read_csv('deco_stops_us.csv')
+        
+        if 'dive_depth_m' in p_us.columns:
+            p_us['dive_depth_m'] = p_us['dive_depth_m'].astype(float) * 0.3048
+        if 'stop_depth_m' in s_us.columns:
+            s_us['stop_depth_m'] = s_us['stop_depth_m'].astype(float) * 0.3048
+            
+        for col in ['bottom_time_min', 'ascent_to_1st_stop_min']:
+            if col in p_us.columns:
+                p_us[col] = p_us[col].apply(parse_us_time)
+        if 'duration_air_min' in s_us.columns:
+            s_us['duration_air_min'] = s_us['duration_air_min'].apply(parse_us_time)
+            
+    except FileNotFoundError:
+        p_us, s_us = pd.DataFrame(), pd.DataFrame()
+
+    return profiles, stops, p_us, s_us
 
 def get_safe_table_depth(input_depth, profiles_df):
     if profiles_df.empty: return input_depth
@@ -208,10 +237,11 @@ def sanitize_pl(text):
         text = text.replace(k, v)
     return text
 
-def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df, stops_df):
+def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df, stops_df, p_us_df, s_us_df):
     profile_id = logbook_data.get('final_profile_id')
     break_events = logbook_data.get('break_events', []) 
     pre_deco_break = logbook_data.get('pre_deco_break', False)
+    planned_depth = logbook_data.get('depth', 0)
     
     if profile_id is None:
         return None
@@ -297,15 +327,104 @@ def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df,
     if curr_y > 0:
         next_x = curr_x + 1
         ax.plot([curr_x, next_x], [curr_y, 0], color='black', linewidth=2)
-        curr_x, curr_y = next_x, 0
+        
+    ax.plot([], [], color='black', linewidth=2, label='PL Profil (Główny)')
+    if used_o2:
+        ax.plot([], [], color='#00BFFF', linewidth=3, label='PL Tlen (O2)')
+
+    us_title_ext = ""
+    if not p_us_df.empty and not s_us_df.empty:
+        us_depth = get_safe_table_depth(planned_depth, p_us_df)
+        us_subset = p_us_df[p_us_df['dive_depth_m'] == us_depth].sort_values('bottom_time_min')
+        us_idx = calculate_profile_index(us_subset, actual_time, risk_active=False, is_longer=False)
+        
+        if us_idx != -1:
+            us_profile_id = us_subset.iloc[us_idx]['profile_id']
+            us_row = p_us_df[p_us_df['profile_id'] == us_profile_id].iloc[0]
+            us_plot_depth = us_row['dive_depth_m']
+            us_stops = s_us_df[s_us_df['profile_id'] == us_profile_id].sort_values('stop_depth_m', ascending=False)
+            us_ascent = us_row['ascent_to_1st_stop_min']
+            
+            us_title_ext = f" | US: {us_plot_depth:.1f}m"
+            
+            curr_x, curr_y = 0, 0
+            next_x, next_y = curr_x + descent_t, us_plot_depth
+            ax.plot([curr_x, next_x], [curr_y, next_y], color='red', linewidth=2, linestyle='--', alpha=0.7)
+            curr_x, curr_y = next_x, next_y
+            
+            ax.plot([curr_x, bt_end], [curr_y, curr_y], color='red', linewidth=2, linestyle='--', alpha=0.7)
+            curr_x = bt_end
+            
+            if pre_deco_break:
+                next_x, next_y = curr_x + 1, 0
+                ax.plot([curr_x, next_x], [curr_y, next_y], color='red', linewidth=2, linestyle=':')
+                curr_x, curr_y = next_x, next_y
+                next_x = curr_x + 5
+                ax.plot([curr_x, next_x], [curr_y, curr_y], color='red', linewidth=2, linestyle='--')
+                curr_x = next_x
+                next_x, next_y = curr_x + 1, us_plot_depth
+                ax.plot([curr_x, next_x], [curr_y, next_y], color='red', linewidth=2, linestyle=':')
+                curr_x, curr_y = next_x, next_y
+                
+                is_us_o2_flush = (used_o2 and calculate_o2_time(10, us_plot_depth) is not None)
+                c_flush = '#FF6347' if is_us_o2_flush else 'red' 
+                next_x = curr_x + 10
+                ax.plot([curr_x, next_x], [curr_y, curr_y], color=c_flush, linewidth=3 if is_us_o2_flush else 2, linestyle='--')
+                curr_x = next_x
+                
+            target_depth = us_stops.iloc[0]['stop_depth_m'] if not us_stops.empty else 0
+            next_x, next_y = curr_x + us_ascent, target_depth
+            ax.plot([curr_x, next_x], [curr_y, next_y], color='red', linewidth=2, linestyle='--', alpha=0.7)
+            curr_x, curr_y = next_x, next_y
+            
+            if not us_stops.empty:
+                for i, (_, stop) in enumerate(us_stops.iterrows()):
+                    depth = stop['stop_depth_m']
+                    if curr_y > depth:
+                        next_x, next_y = curr_x + 1, depth
+                        ax.plot([curr_x, next_x], [curr_y, next_y], color='red', linewidth=2, linestyle='--', alpha=0.7)
+                        curr_x, curr_y = next_x, next_y
+                    
+                    if (i+1) in break_events:
+                        next_x, next_y = curr_x + 1, 0
+                        ax.plot([curr_x, next_x], [curr_y, next_y], color='red', linewidth=2, linestyle=':')
+                        curr_x, curr_y = next_x, next_y
+                        next_x = curr_x + 5
+                        ax.plot([curr_x, next_x], [curr_y, curr_y], color='red', linewidth=2, linestyle='--')
+                        curr_x = next_x
+                        next_x, next_y = curr_x + 1, depth
+                        ax.plot([curr_x, next_x], [curr_y, next_y], color='red', linewidth=2, linestyle=':')
+                        curr_x, curr_y = next_x, next_y
+                        
+                        is_us_o2_flush = (used_o2 and calculate_o2_time(10, depth) is not None)
+                        c_flush = '#FF6347' if is_us_o2_flush else 'red'
+                        next_x = curr_x + 10
+                        ax.plot([curr_x, next_x], [curr_y, curr_y], color=c_flush, linewidth=3 if is_us_o2_flush else 2, linestyle='--')
+                        curr_x = next_x
+
+                    d_air = stop['duration_air_min']
+                    d_o2 = calculate_o2_time(d_air, depth)
+                    is_us_o2 = (used_o2 and d_o2 is not None)
+                    dur = d_o2 if is_us_o2 else d_air
+                    col = '#FF6347' if is_us_o2 else 'red'
+                    
+                    next_x = curr_x + dur
+                    ax.plot([curr_x, next_x], [curr_y, curr_y], color=col, linewidth=3 if is_us_o2 else 2, linestyle='--', alpha=0.8)
+                    curr_x = next_x
+            
+            if curr_y > 0:
+                next_x = curr_x + 1
+                ax.plot([curr_x, next_x], [curr_y, 0], color='red', linewidth=2, linestyle='--', alpha=0.7)
+                
+            ax.plot([], [], color='red', linestyle='--', linewidth=2, label='US Navy (Porównanie)')
+            if used_o2:
+                 ax.plot([], [], color='#FF6347', linestyle='--', linewidth=3, label='US Navy Tlen')
 
     ax.invert_yaxis()
     ax.set_xlabel("Czas (min)")
     ax.set_ylabel("Głębokość (m)")
-    if used_o2:
-        ax.plot([], [], color='#00BFFF', linewidth=3, label='Dekompresja Tlenowa')
-        ax.legend(loc='lower right')
-    ax.set_title(f"Profil Nurkowania [Głębokość Tabeli: {plot_depth}m | Czas Dna: {bt_end:.1f} min]")
+    ax.legend(loc='lower right')
+    ax.set_title(f"Profil Nurkowania [PL: {plot_depth}m{us_title_ext} | Czas Dna: {bt_end:.1f} min]")
     ax.grid(True, which='both', linestyle='--', alpha=0.7)
     return fig
 
@@ -402,7 +521,7 @@ def render_input_view(placeholder):
 
 
 def render_results_view(placeholder):
-    profiles_df, stops_df = load_data()
+    profiles_df, stops_df, p_us, s_us = load_data()
     with placeholder.container():
         @st.fragment(run_every=1)
         def live_timer_header():
@@ -676,7 +795,7 @@ def render_results_view(placeholder):
 def render_logbook_view(placeholder):
     data = st.session_state.logbook_context
     entries = st.session_state.logbook_entries
-    profiles_df, stops_df = load_data()
+    profiles_df, stops_df, p_us, s_us = load_data()
     
     with placeholder.container():
         st.title("Raport z nurkowania (Logbook)")
@@ -686,7 +805,7 @@ def render_logbook_view(placeholder):
             with c_g1: graph_time = st.number_input("Rzeczywisty czas dna (min)", value=float(data.get('actual_bottom_time_min', 0)), step=1.0)
             with c_g2: graph_o2 = st.checkbox("Użyto tlenu do dekompresji?", value=data.get('used_o2', False))
         
-        fig = generate_dive_profile_chart(graph_time, graph_o2, data, profiles_df, stops_df)
+        fig = generate_dive_profile_chart(graph_time, graph_o2, data, profiles_df, stops_df, p_us, s_us)
         if fig: st.pyplot(fig)
         else: st.info("No decompression profile data available for graph generation.")
         st.markdown("---")
