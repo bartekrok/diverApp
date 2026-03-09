@@ -6,10 +6,8 @@ from datetime import datetime
 from fpdf import FPDF
 import matplotlib.pyplot as plt
 
-# --- PAGE CONFIG ---
 st.set_page_config(page_title="Diver Decompression Planner", layout="wide")
 
-# --- CUSTOM CSS ---
 st.markdown("""
 <style>
 div.scrolling-wrapper {
@@ -170,10 +168,10 @@ def load_data():
         p_us = pd.read_csv('dive_profiles_us.csv')
         s_us = pd.read_csv('deco_stops_us.csv')
         
-        if 'dive_depth_m' in p_us.columns:
-            p_us['dive_depth_m'] = p_us['dive_depth_m'].astype(float) * 0.3048
-        if 'stop_depth_m' in s_us.columns:
-            s_us['stop_depth_m'] = s_us['stop_depth_m'].astype(float) * 0.3048
+        if 'dive_depth_fsw' in p_us.columns:
+            p_us['dive_depth_m'] = p_us['dive_depth_fsw'].astype(float) * 0.3048
+        if 'stop_depth_fsw' in s_us.columns:
+            s_us['stop_depth_m'] = s_us['stop_depth_fsw'].astype(float) * 0.3048
             
         for col in ['bottom_time_min', 'ascent_to_1st_stop_min']:
             if col in p_us.columns:
@@ -367,7 +365,7 @@ def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df,
                 curr_x, curr_y = next_x, next_y
                 
                 is_us_o2_flush = (used_o2 and calculate_o2_time(10, us_plot_depth) is not None)
-                c_flush = '#FF6347' if is_us_o2_flush else 'red' 
+                c_flush = '#FF6347' if is_us_o2_flush else 'red'
                 next_x = curr_x + 10
                 ax.plot([curr_x, next_x], [curr_y, curr_y], color=c_flush, linewidth=3 if is_us_o2_flush else 2, linestyle='--')
                 curr_x = next_x
@@ -490,7 +488,7 @@ if 'active_profile_id_tracker' not in st.session_state: st.session_state.active_
 def render_input_view(placeholder):
     with placeholder.container():
         st.title("🤿 Start New Dive")
-        depth_input = st.number_input("Planned Depth (m):", min_value=0, value=12, step=1, key="input_depth")
+        depth_input = st.number_input("Planned Depth (m):", min_value=0, value=15, step=1, key="input_depth")
         st.markdown("### Safety Risk Factors")
         c1, c2 = st.columns(2)
         with c1: f1 = st.checkbox("Not trained diver", key="chk_1"); f2 = st.checkbox("DCS likelihood", key="chk_2"); f3 = st.checkbox("Doing very hard work", key="chk_3")

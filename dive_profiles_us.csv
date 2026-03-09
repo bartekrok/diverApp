@@ -1,4 +1,4 @@
-profile_id,dive_depth_m,bottom_time_min,ascent_to_1st_stop_min,total_deco_air_min,total_deco_o2_min
+profile_id,dive_depth_fsw,bottom_time_min,ascent_to_1st_stop_min,total_deco_air_min,total_deco_o2_min
 1,30,371,1,1,0
 2,30,380,0:20,6,2
 3,30,420,0:20,23,6
