@@ -147,7 +147,7 @@ div[role="radiogroup"] {
 </style>
 """, unsafe_allow_html=True)
 
-def parse_us_time(val):
+def parse_time_str(val):
     if pd.isna(val): return 0.0
     val_str = str(val).strip()
     if ':' in val_str:
@@ -175,14 +175,27 @@ def load_data():
             
         for col in ['bottom_time_min', 'ascent_to_1st_stop_min']:
             if col in p_us.columns:
-                p_us[col] = p_us[col].apply(parse_us_time)
+                p_us[col] = p_us[col].apply(parse_time_str)
         if 'duration_air_min' in s_us.columns:
-            s_us['duration_air_min'] = s_us['duration_air_min'].apply(parse_us_time)
+            s_us['duration_air_min'] = s_us['duration_air_min'].apply(parse_time_str)
             
     except FileNotFoundError:
         p_us, s_us = pd.DataFrame(), pd.DataFrame()
 
-    return profiles, stops, p_us, s_us
+    try:
+        p_swe = pd.read_csv('dive_profiles_swem.csv')
+        s_swe = pd.read_csv('deco_stops_swem.csv')
+        
+        for col in ['bottom_time_min', 'ascent_to_1st_stop_min']:
+            if col in p_swe.columns:
+                p_swe[col] = p_swe[col].apply(parse_time_str)
+        if 'duration_air_min' in s_swe.columns:
+            s_swe['duration_air_min'] = s_swe['duration_air_min'].apply(parse_time_str)
+            
+    except FileNotFoundError:
+        p_swe, s_swe = pd.DataFrame(), pd.DataFrame()
+
+    return profiles, stops, p_us, s_us, p_swe, s_swe
 
 def get_safe_table_depth(input_depth, profiles_df):
     if profiles_df.empty: return input_depth
@@ -235,7 +248,7 @@ def sanitize_pl(text):
         text = text.replace(k, v)
     return text
 
-def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df, stops_df, p_us_df, s_us_df):
+def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df, stops_df, p_us_df, s_us_df, p_swe_df, s_swe_df):
     profile_id = logbook_data.get('final_profile_id')
     break_events = logbook_data.get('break_events', []) 
     pre_deco_break = logbook_data.get('pre_deco_break', False)
@@ -244,12 +257,13 @@ def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df,
     if profile_id is None:
         return None
 
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
     row = profiles_df[profiles_df['profile_id'] == profile_id].iloc[0]
     plot_depth = row['dive_depth_m']
     my_stops = stops_df[stops_df['profile_id'] == profile_id].sort_values('stop_depth_m', ascending=False)
     ascent_to_1st = row['ascent_to_1st_stop_min']
     
-    fig, ax = plt.subplots(figsize=(10, 5))
     curr_x, curr_y = 0, 0
     
     descent_t = 2
@@ -344,7 +358,6 @@ def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df,
             us_ascent = us_row['ascent_to_1st_stop_min']
             
             us_title_ext = f" | US: {us_plot_depth:.1f}m"
-            
             curr_x, curr_y = 0, 0
             next_x, next_y = curr_x + descent_t, us_plot_depth
             ax.plot([curr_x, next_x], [curr_y, next_y], color='red', linewidth=2, linestyle='--', alpha=0.7)
@@ -418,11 +431,101 @@ def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df,
             if used_o2:
                  ax.plot([], [], color='#FF6347', linestyle='--', linewidth=3, label='US Navy Tlen')
 
+
+    swe_title_ext = ""
+    if not p_swe_df.empty and not s_swe_df.empty:
+        swe_depth = get_safe_table_depth(planned_depth, p_swe_df)
+        swe_subset = p_swe_df[p_swe_df['dive_depth_m'] == swe_depth].sort_values('bottom_time_min')
+        swe_idx = calculate_profile_index(swe_subset, actual_time, risk_active=False, is_longer=False)
+        
+        if swe_idx != -1:
+            swe_profile_id = swe_subset.iloc[swe_idx]['profile_id']
+            swe_row = p_swe_df[p_swe_df['profile_id'] == swe_profile_id].iloc[0]
+            swe_plot_depth = swe_row['dive_depth_m']
+            swe_stops = s_swe_df[s_swe_df['profile_id'] == swe_profile_id].sort_values('stop_depth_m', ascending=False)
+            swe_ascent = swe_row['ascent_to_1st_stop_min']
+            
+            swe_title_ext = f" | SWE: {swe_plot_depth:.1f}m"
+            curr_x, curr_y = 0, 0
+            
+            next_x, next_y = curr_x + descent_t, swe_plot_depth
+            ax.plot([curr_x, next_x], [curr_y, next_y], color='green', linewidth=2, linestyle='--', alpha=0.7)
+            curr_x, curr_y = next_x, next_y
+            
+            ax.plot([curr_x, bt_end], [curr_y, curr_y], color='green', linewidth=2, linestyle='--', alpha=0.7)
+            curr_x = bt_end
+            
+            if pre_deco_break:
+                next_x, next_y = curr_x + 1, 0
+                ax.plot([curr_x, next_x], [curr_y, next_y], color='green', linewidth=2, linestyle=':')
+                curr_x, curr_y = next_x, next_y
+                next_x = curr_x + 5
+                ax.plot([curr_x, next_x], [curr_y, curr_y], color='green', linewidth=2, linestyle='--')
+                curr_x = next_x
+                next_x, next_y = curr_x + 1, swe_plot_depth
+                ax.plot([curr_x, next_x], [curr_y, next_y], color='green', linewidth=2, linestyle=':')
+                curr_x, curr_y = next_x, next_y
+                
+                is_swe_o2_flush = (used_o2 and calculate_o2_time(10, swe_plot_depth) is not None)
+                c_flush = '#32CD32' if is_swe_o2_flush else 'green' 
+                next_x = curr_x + 10
+                ax.plot([curr_x, next_x], [curr_y, curr_y], color=c_flush, linewidth=3 if is_swe_o2_flush else 2, linestyle='--')
+                curr_x = next_x
+                
+            target_depth = swe_stops.iloc[0]['stop_depth_m'] if not swe_stops.empty else 0
+            next_x, next_y = curr_x + swe_ascent, target_depth
+            ax.plot([curr_x, next_x], [curr_y, next_y], color='green', linewidth=2, linestyle='--', alpha=0.7)
+            curr_x, curr_y = next_x, next_y
+            
+            if not swe_stops.empty:
+                for i, (_, stop) in enumerate(swe_stops.iterrows()):
+                    depth = stop['stop_depth_m']
+                    if curr_y > depth:
+                        next_x, next_y = curr_x + 1, depth
+                        ax.plot([curr_x, next_x], [curr_y, next_y], color='green', linewidth=2, linestyle='--', alpha=0.7)
+                        curr_x, curr_y = next_x, next_y
+                    
+                    if (i+1) in break_events:
+                        next_x, next_y = curr_x + 1, 0
+                        ax.plot([curr_x, next_x], [curr_y, next_y], color='green', linewidth=2, linestyle=':')
+                        curr_x, curr_y = next_x, next_y
+                        next_x = curr_x + 5
+                        ax.plot([curr_x, next_x], [curr_y, curr_y], color='green', linewidth=2, linestyle='--')
+                        curr_x = next_x
+                        next_x, next_y = curr_x + 1, depth
+                        ax.plot([curr_x, next_x], [curr_y, next_y], color='green', linewidth=2, linestyle=':')
+                        curr_x, curr_y = next_x, next_y
+                        
+                        is_swe_o2_flush = (used_o2 and calculate_o2_time(10, depth) is not None)
+                        c_flush = '#32CD32' if is_swe_o2_flush else 'green'
+                        next_x = curr_x + 10
+                        ax.plot([curr_x, next_x], [curr_y, curr_y], color=c_flush, linewidth=3 if is_swe_o2_flush else 2, linestyle='--')
+                        curr_x = next_x
+
+                    d_air = stop['duration_air_min']
+                    d_o2 = calculate_o2_time(d_air, depth)
+                    is_swe_o2 = (used_o2 and d_o2 is not None)
+                    dur = d_o2 if is_swe_o2 else d_air
+                    col = '#32CD32' if is_swe_o2 else 'green'
+                    
+                    next_x = curr_x + dur
+                    ax.plot([curr_x, next_x], [curr_y, curr_y], color=col, linewidth=3 if is_swe_o2 else 2, linestyle='--', alpha=0.8)
+                    curr_x = next_x
+            
+            if curr_y > 0:
+                next_x = curr_x + 1
+                ax.plot([curr_x, next_x], [curr_y, 0], color='green', linewidth=2, linestyle='--', alpha=0.7)
+                
+            ax.plot([], [], color='green', linestyle='--', linewidth=2, label='Szwecja (Porównanie)')
+            if used_o2:
+                 ax.plot([], [], color='#32CD32', linestyle='--', linewidth=3, label='Szwecja Tlen')
+
+
     ax.invert_yaxis()
     ax.set_xlabel("Czas (min)")
     ax.set_ylabel("Głębokość (m)")
     ax.legend(loc='lower right')
-    ax.set_title(f"Profil Nurkowania [PL: {plot_depth}m{us_title_ext} | Czas Dna: {bt_end:.1f} min]")
+    ax.set_title(f"Profil Nurkowania [PL: {plot_depth}m{us_title_ext}{swe_title_ext} | Czas Dna: {bt_end:.1f} min]")
     ax.grid(True, which='both', linestyle='--', alpha=0.7)
     return fig
 
@@ -488,7 +591,7 @@ if 'active_profile_id_tracker' not in st.session_state: st.session_state.active_
 def render_input_view(placeholder):
     with placeholder.container():
         st.title("🤿 Start New Dive")
-        depth_input = st.number_input("Planned Depth (m):", min_value=0, value=15, step=1, key="input_depth")
+        depth_input = st.number_input("Planned Depth (m):", min_value=0, value=12, step=1, key="input_depth")
         st.markdown("### Safety Risk Factors")
         c1, c2 = st.columns(2)
         with c1: f1 = st.checkbox("Not trained diver", key="chk_1"); f2 = st.checkbox("DCS likelihood", key="chk_2"); f3 = st.checkbox("Doing very hard work", key="chk_3")
@@ -519,7 +622,7 @@ def render_input_view(placeholder):
 
 
 def render_results_view(placeholder):
-    profiles_df, stops_df, p_us, s_us = load_data()
+    profiles_df, stops_df, p_us, s_us, p_swe, s_swe = load_data()
     with placeholder.container():
         @st.fragment(run_every=1)
         def live_timer_header():
@@ -793,7 +896,7 @@ def render_results_view(placeholder):
 def render_logbook_view(placeholder):
     data = st.session_state.logbook_context
     entries = st.session_state.logbook_entries
-    profiles_df, stops_df, p_us, s_us = load_data()
+    profiles_df, stops_df, p_us, s_us, p_swe, s_swe = load_data()
     
     with placeholder.container():
         st.title("Raport z nurkowania (Logbook)")
@@ -803,7 +906,7 @@ def render_logbook_view(placeholder):
             with c_g1: graph_time = st.number_input("Rzeczywisty czas dna (min)", value=float(data.get('actual_bottom_time_min', 0)), step=1.0)
             with c_g2: graph_o2 = st.checkbox("Użyto tlenu do dekompresji?", value=data.get('used_o2', False))
         
-        fig = generate_dive_profile_chart(graph_time, graph_o2, data, profiles_df, stops_df, p_us, s_us)
+        fig = generate_dive_profile_chart(graph_time, graph_o2, data, profiles_df, stops_df, p_us, s_us, p_swe, s_swe)
         if fig: st.pyplot(fig)
         else: st.info("No decompression profile data available for graph generation.")
         st.markdown("---")
