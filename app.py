@@ -4,7 +4,7 @@ import time
 import math
 from datetime import datetime
 from fpdf import FPDF
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 
 st.set_page_config(page_title="Diver Decompression Planner", layout="wide")
 
@@ -236,16 +236,13 @@ def calculate_profile_index(subset, elapsed_min, risk_active, is_longer):
     return final_idx
 
 def sanitize_pl(text):
-    """Converts Polish characters to Latin equivalents for FPDF compatibility"""
-    if text is None:
-        return ""
+    if text is None: return ""
     text = str(text)
     repls = {
         'ą':'a', 'ć':'c', 'ę':'e', 'ł':'l', 'ń':'n', 'ó':'o', 'ś':'s', 'ź':'z', 'ż':'z',
         'Ą':'A', 'Ć':'C', 'Ę':'E', 'Ł':'L', 'Ń':'N', 'Ó':'O', 'Ś':'S', 'Ź':'Z', 'Ż':'Z'
     }
-    for k, v in repls.items():
-        text = text.replace(k, v)
+    for k, v in repls.items(): text = text.replace(k, v)
     return text
 
 def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df, stops_df, p_us_df, s_us_df, p_swe_df, s_swe_df):
@@ -257,44 +254,62 @@ def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df,
     if profile_id is None:
         return None
 
-    fig, ax = plt.subplots(figsize=(10, 6))
-    
+    fig = go.Figure()
+    legends_shown = set()
+
+    def plot_segment(x0, x1, y0, y1, color, width, dash='solid', legend_key=None, legend_label=None):
+        show_leg = False
+        if legend_key and legend_key not in legends_shown:
+            show_leg = True
+            legends_shown.add(legend_key)
+            
+        fig.add_trace(go.Scatter(
+            x=[x0, x1], y=[y0, y1],
+            mode='lines',
+            line=dict(color=color, width=width, dash=dash),
+            name=legend_label if legend_label else (legend_key if legend_key else ""),
+            showlegend=show_leg,
+            legendgroup=legend_key if legend_key else "unnamed",
+            hovertemplate="Czas: %{x:.1f} min<br>Głębokość: %{y:.1f} m<extra></extra>"
+        ))
+
     row = profiles_df[profiles_df['profile_id'] == profile_id].iloc[0]
     plot_depth = row['dive_depth_m']
     my_stops = stops_df[stops_df['profile_id'] == profile_id].sort_values('stop_depth_m', ascending=False)
     ascent_to_1st = row['ascent_to_1st_stop_min']
     
     curr_x, curr_y = 0, 0
-    
-    descent_t = 2
-    next_x, next_y = curr_x + descent_t, plot_depth
-    ax.plot([curr_x, next_x], [curr_y, next_y], color='black', linewidth=2)
+    next_x, next_y = curr_x + 2, plot_depth
+    plot_segment(curr_x, next_x, curr_y, next_y, 'black', 2, 'solid', 'PL_Air', 'PL Profil (Główny)')
     curr_x, curr_y = next_x, next_y
     
-    bt_end = max(actual_time, descent_t + 1)
-    ax.plot([curr_x, bt_end], [curr_y, curr_y], color='black', linewidth=2)
+    bt_end = max(actual_time, 2 + 1)
+    plot_segment(curr_x, bt_end, curr_y, curr_y, 'black', 2, 'solid', 'PL_Air')
     curr_x = bt_end
     
     if pre_deco_break:
         next_x, next_y = curr_x + 1, 0
-        ax.plot([curr_x, next_x], [curr_y, next_y], color='black', linewidth=2, linestyle=':')
+        plot_segment(curr_x, next_x, curr_y, next_y, 'black', 2, 'dot', 'PL_Air')
         curr_x, curr_y = next_x, next_y
+        
         next_x = curr_x + 5
-        ax.plot([curr_x, next_x], [curr_y, curr_y], color='black', linewidth=2)
+        plot_segment(curr_x, next_x, curr_y, curr_y, 'black', 2, 'solid', 'PL_Air')
         curr_x = next_x
+        
         next_x, next_y = curr_x + 1, plot_depth
-        ax.plot([curr_x, next_x], [curr_y, next_y], color='black', linewidth=2, linestyle=':')
+        plot_segment(curr_x, next_x, curr_y, next_y, 'black', 2, 'dot', 'PL_Air')
         curr_x, curr_y = next_x, next_y
+        
         d_o2_check = calculate_o2_time(10, plot_depth)
         is_o2_flush = (used_o2 and d_o2_check is not None)
-        color_flush = '#00BFFF' if is_o2_flush else 'black'
+        c_flush, w_flush, l_key, l_lbl = ('#00BFFF', 3, 'PL_O2', 'PL Tlen (O2)') if is_o2_flush else ('black', 2, 'PL_Air', None)
         next_x = curr_x + 10
-        ax.plot([curr_x, next_x], [curr_y, curr_y], color=color_flush, linewidth=3 if is_o2_flush else 2)
+        plot_segment(curr_x, next_x, curr_y, curr_y, c_flush, w_flush, 'solid', l_key, l_lbl)
         curr_x = next_x
 
     target_depth = my_stops.iloc[0]['stop_depth_m'] if not my_stops.empty else 0
     next_x, next_y = curr_x + ascent_to_1st, target_depth
-    ax.plot([curr_x, next_x], [curr_y, next_y], color='black', linewidth=2)
+    plot_segment(curr_x, next_x, curr_y, next_y, 'black', 2, 'solid', 'PL_Air')
     curr_x, curr_y = next_x, next_y
     
     if not my_stops.empty:
@@ -302,47 +317,39 @@ def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df,
             depth = stop['stop_depth_m']
             if curr_y > depth:
                 next_x, next_y = curr_x + 1, depth
-                ax.plot([curr_x, next_x], [curr_y, next_y], color='black', linewidth=2)
+                plot_segment(curr_x, next_x, curr_y, next_y, 'black', 2, 'solid', 'PL_Air')
                 curr_x, curr_y = next_x, next_y
             
-            current_stop_logic_index = i + 1
-            if current_stop_logic_index in break_events:
+            if (i + 1) in break_events:
                 next_x, next_y = curr_x + 1, 0
-                ax.plot([curr_x, next_x], [curr_y, next_y], color='black', linewidth=2, linestyle=':')
+                plot_segment(curr_x, next_x, curr_y, next_y, 'black', 2, 'dot', 'PL_Air')
                 curr_x, curr_y = next_x, next_y
                 next_x = curr_x + 5
-                ax.plot([curr_x, next_x], [curr_y, curr_y], color='black', linewidth=2)
+                plot_segment(curr_x, next_x, curr_y, curr_y, 'black', 2, 'solid', 'PL_Air')
                 curr_x = next_x
                 next_x, next_y = curr_x + 1, depth
-                ax.plot([curr_x, next_x], [curr_y, next_y], color='black', linewidth=2, linestyle=':')
+                plot_segment(curr_x, next_x, curr_y, next_y, 'black', 2, 'dot', 'PL_Air')
                 curr_x, curr_y = next_x, next_y
                 d_o2_check = calculate_o2_time(10, depth)
                 is_o2_flush = (used_o2 and d_o2_check is not None)
-                color_flush = '#00BFFF' if is_o2_flush else 'black'
+                c_flush, w_flush, l_key, l_lbl = ('#00BFFF', 3, 'PL_O2', 'PL Tlen (O2)') if is_o2_flush else ('black', 2, 'PL_Air', None)
                 next_x = curr_x + 10
-                ax.plot([curr_x, next_x], [curr_y, curr_y], color=color_flush, linewidth=3 if is_o2_flush else 2)
+                plot_segment(curr_x, next_x, curr_y, curr_y, c_flush, w_flush, 'solid', l_key, l_lbl)
                 curr_x = next_x
             
             d_air = stop['duration_air_min']
             d_o2 = calculate_o2_time(d_air, depth)
-            is_o2_segment = False
-            duration = d_air
-            if used_o2 and d_o2 is not None:
-                duration = d_o2
-                is_o2_segment = True
+            is_o2_segment = (used_o2 and d_o2 is not None)
+            dur = d_o2 if is_o2_segment else d_air
+            c_seg, w_seg, l_key, l_lbl = ('#00BFFF', 3, 'PL_O2', 'PL Tlen (O2)') if is_o2_segment else ('black', 2, 'PL_Air', None)
             
-            color = '#00BFFF' if is_o2_segment else 'black'
-            next_x = curr_x + duration
-            ax.plot([curr_x, next_x], [curr_y, curr_y], color=color, linewidth=3 if is_o2_segment else 2)
+            next_x = curr_x + dur
+            plot_segment(curr_x, next_x, curr_y, curr_y, c_seg, w_seg, 'solid', l_key, l_lbl)
             curr_x = next_x
             
     if curr_y > 0:
         next_x = curr_x + 1
-        ax.plot([curr_x, next_x], [curr_y, 0], color='black', linewidth=2)
-        
-    ax.plot([], [], color='black', linewidth=2, label='PL Profil (Główny)')
-    if used_o2:
-        ax.plot([], [], color='#00BFFF', linewidth=3, label='PL Tlen (O2)')
+        plot_segment(curr_x, next_x, curr_y, 0, 'black', 2, 'solid', 'PL_Air')
 
     us_title_ext = ""
     if not p_us_df.empty and not s_us_df.empty:
@@ -359,33 +366,34 @@ def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df,
             
             us_title_ext = f" | US: {us_plot_depth:.1f}m"
             curr_x, curr_y = 0, 0
-            next_x, next_y = curr_x + descent_t, us_plot_depth
-            ax.plot([curr_x, next_x], [curr_y, next_y], color='red', linewidth=2, linestyle='--', alpha=0.7)
+            
+            next_x, next_y = curr_x + 2, us_plot_depth
+            plot_segment(curr_x, next_x, curr_y, next_y, 'red', 2, 'dash', 'US_Air', 'US Navy (Porównanie)')
             curr_x, curr_y = next_x, next_y
             
-            ax.plot([curr_x, bt_end], [curr_y, curr_y], color='red', linewidth=2, linestyle='--', alpha=0.7)
+            plot_segment(curr_x, bt_end, curr_y, curr_y, 'red', 2, 'dash', 'US_Air')
             curr_x = bt_end
             
             if pre_deco_break:
                 next_x, next_y = curr_x + 1, 0
-                ax.plot([curr_x, next_x], [curr_y, next_y], color='red', linewidth=2, linestyle=':')
+                plot_segment(curr_x, next_x, curr_y, next_y, 'red', 2, 'dot', 'US_Air')
                 curr_x, curr_y = next_x, next_y
                 next_x = curr_x + 5
-                ax.plot([curr_x, next_x], [curr_y, curr_y], color='red', linewidth=2, linestyle='--')
+                plot_segment(curr_x, next_x, curr_y, curr_y, 'red', 2, 'dash', 'US_Air')
                 curr_x = next_x
                 next_x, next_y = curr_x + 1, us_plot_depth
-                ax.plot([curr_x, next_x], [curr_y, next_y], color='red', linewidth=2, linestyle=':')
+                plot_segment(curr_x, next_x, curr_y, next_y, 'red', 2, 'dot', 'US_Air')
                 curr_x, curr_y = next_x, next_y
                 
                 is_us_o2_flush = (used_o2 and calculate_o2_time(10, us_plot_depth) is not None)
-                c_flush = '#FF6347' if is_us_o2_flush else 'red'
+                c_flush, w_flush, l_key, l_lbl = ('#FF6347', 3, 'US_O2', 'US Navy Tlen') if is_us_o2_flush else ('red', 2, 'US_Air', None)
                 next_x = curr_x + 10
-                ax.plot([curr_x, next_x], [curr_y, curr_y], color=c_flush, linewidth=3 if is_us_o2_flush else 2, linestyle='--')
+                plot_segment(curr_x, next_x, curr_y, curr_y, c_flush, w_flush, 'dash', l_key, l_lbl)
                 curr_x = next_x
                 
             target_depth = us_stops.iloc[0]['stop_depth_m'] if not us_stops.empty else 0
             next_x, next_y = curr_x + us_ascent, target_depth
-            ax.plot([curr_x, next_x], [curr_y, next_y], color='red', linewidth=2, linestyle='--', alpha=0.7)
+            plot_segment(curr_x, next_x, curr_y, next_y, 'red', 2, 'dash', 'US_Air')
             curr_x, curr_y = next_x, next_y
             
             if not us_stops.empty:
@@ -393,43 +401,39 @@ def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df,
                     depth = stop['stop_depth_m']
                     if curr_y > depth:
                         next_x, next_y = curr_x + 1, depth
-                        ax.plot([curr_x, next_x], [curr_y, next_y], color='red', linewidth=2, linestyle='--', alpha=0.7)
+                        plot_segment(curr_x, next_x, curr_y, next_y, 'red', 2, 'dash', 'US_Air')
                         curr_x, curr_y = next_x, next_y
                     
                     if (i+1) in break_events:
                         next_x, next_y = curr_x + 1, 0
-                        ax.plot([curr_x, next_x], [curr_y, next_y], color='red', linewidth=2, linestyle=':')
+                        plot_segment(curr_x, next_x, curr_y, next_y, 'red', 2, 'dot', 'US_Air')
                         curr_x, curr_y = next_x, next_y
                         next_x = curr_x + 5
-                        ax.plot([curr_x, next_x], [curr_y, curr_y], color='red', linewidth=2, linestyle='--')
+                        plot_segment(curr_x, next_x, curr_y, curr_y, 'red', 2, 'dash', 'US_Air')
                         curr_x = next_x
                         next_x, next_y = curr_x + 1, depth
-                        ax.plot([curr_x, next_x], [curr_y, next_y], color='red', linewidth=2, linestyle=':')
+                        plot_segment(curr_x, next_x, curr_y, next_y, 'red', 2, 'dot', 'US_Air')
                         curr_x, curr_y = next_x, next_y
                         
                         is_us_o2_flush = (used_o2 and calculate_o2_time(10, depth) is not None)
-                        c_flush = '#FF6347' if is_us_o2_flush else 'red'
+                        c_flush, w_flush, l_key, l_lbl = ('#FF6347', 3, 'US_O2', 'US Navy Tlen') if is_us_o2_flush else ('red', 2, 'US_Air', None)
                         next_x = curr_x + 10
-                        ax.plot([curr_x, next_x], [curr_y, curr_y], color=c_flush, linewidth=3 if is_us_o2_flush else 2, linestyle='--')
+                        plot_segment(curr_x, next_x, curr_y, curr_y, c_flush, w_flush, 'dash', l_key, l_lbl)
                         curr_x = next_x
 
                     d_air = stop['duration_air_min']
                     d_o2 = calculate_o2_time(d_air, depth)
                     is_us_o2 = (used_o2 and d_o2 is not None)
                     dur = d_o2 if is_us_o2 else d_air
-                    col = '#FF6347' if is_us_o2 else 'red'
+                    c_seg, w_seg, l_key, l_lbl = ('#FF6347', 3, 'US_O2', 'US Navy Tlen') if is_us_o2 else ('red', 2, 'US_Air', None)
                     
                     next_x = curr_x + dur
-                    ax.plot([curr_x, next_x], [curr_y, curr_y], color=col, linewidth=3 if is_us_o2 else 2, linestyle='--', alpha=0.8)
+                    plot_segment(curr_x, next_x, curr_y, curr_y, c_seg, w_seg, 'dash', l_key, l_lbl)
                     curr_x = next_x
             
             if curr_y > 0:
                 next_x = curr_x + 1
-                ax.plot([curr_x, next_x], [curr_y, 0], color='red', linewidth=2, linestyle='--', alpha=0.7)
-                
-            ax.plot([], [], color='red', linestyle='--', linewidth=2, label='US Navy (Porównanie)')
-            if used_o2:
-                 ax.plot([], [], color='#FF6347', linestyle='--', linewidth=3, label='US Navy Tlen')
+                plot_segment(curr_x, next_x, curr_y, 0, 'red', 2, 'dash', 'US_Air')
 
 
     swe_title_ext = ""
@@ -448,33 +452,33 @@ def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df,
             swe_title_ext = f" | SWE: {swe_plot_depth:.1f}m"
             curr_x, curr_y = 0, 0
             
-            next_x, next_y = curr_x + descent_t, swe_plot_depth
-            ax.plot([curr_x, next_x], [curr_y, next_y], color='green', linewidth=2, linestyle='--', alpha=0.7)
+            next_x, next_y = curr_x + 2, swe_plot_depth
+            plot_segment(curr_x, next_x, curr_y, next_y, 'green', 2, 'dash', 'SWE_Air', 'Szwecja (Porównanie)')
             curr_x, curr_y = next_x, next_y
             
-            ax.plot([curr_x, bt_end], [curr_y, curr_y], color='green', linewidth=2, linestyle='--', alpha=0.7)
+            plot_segment(curr_x, bt_end, curr_y, curr_y, 'green', 2, 'dash', 'SWE_Air')
             curr_x = bt_end
             
             if pre_deco_break:
                 next_x, next_y = curr_x + 1, 0
-                ax.plot([curr_x, next_x], [curr_y, next_y], color='green', linewidth=2, linestyle=':')
+                plot_segment(curr_x, next_x, curr_y, next_y, 'green', 2, 'dot', 'SWE_Air')
                 curr_x, curr_y = next_x, next_y
                 next_x = curr_x + 5
-                ax.plot([curr_x, next_x], [curr_y, curr_y], color='green', linewidth=2, linestyle='--')
+                plot_segment(curr_x, next_x, curr_y, curr_y, 'green', 2, 'dash', 'SWE_Air')
                 curr_x = next_x
                 next_x, next_y = curr_x + 1, swe_plot_depth
-                ax.plot([curr_x, next_x], [curr_y, next_y], color='green', linewidth=2, linestyle=':')
+                plot_segment(curr_x, next_x, curr_y, next_y, 'green', 2, 'dot', 'SWE_Air')
                 curr_x, curr_y = next_x, next_y
                 
                 is_swe_o2_flush = (used_o2 and calculate_o2_time(10, swe_plot_depth) is not None)
-                c_flush = '#32CD32' if is_swe_o2_flush else 'green' 
+                c_flush, w_flush, l_key, l_lbl = ('#32CD32', 3, 'SWE_O2', 'Szwecja Tlen') if is_swe_o2_flush else ('green', 2, 'SWE_Air', None)
                 next_x = curr_x + 10
-                ax.plot([curr_x, next_x], [curr_y, curr_y], color=c_flush, linewidth=3 if is_swe_o2_flush else 2, linestyle='--')
+                plot_segment(curr_x, next_x, curr_y, curr_y, c_flush, w_flush, 'dash', l_key, l_lbl)
                 curr_x = next_x
                 
             target_depth = swe_stops.iloc[0]['stop_depth_m'] if not swe_stops.empty else 0
             next_x, next_y = curr_x + swe_ascent, target_depth
-            ax.plot([curr_x, next_x], [curr_y, next_y], color='green', linewidth=2, linestyle='--', alpha=0.7)
+            plot_segment(curr_x, next_x, curr_y, next_y, 'green', 2, 'dash', 'SWE_Air')
             curr_x, curr_y = next_x, next_y
             
             if not swe_stops.empty:
@@ -482,51 +486,61 @@ def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df,
                     depth = stop['stop_depth_m']
                     if curr_y > depth:
                         next_x, next_y = curr_x + 1, depth
-                        ax.plot([curr_x, next_x], [curr_y, next_y], color='green', linewidth=2, linestyle='--', alpha=0.7)
+                        plot_segment(curr_x, next_x, curr_y, next_y, 'green', 2, 'dash', 'SWE_Air')
                         curr_x, curr_y = next_x, next_y
                     
                     if (i+1) in break_events:
                         next_x, next_y = curr_x + 1, 0
-                        ax.plot([curr_x, next_x], [curr_y, next_y], color='green', linewidth=2, linestyle=':')
+                        plot_segment(curr_x, next_x, curr_y, next_y, 'green', 2, 'dot', 'SWE_Air')
                         curr_x, curr_y = next_x, next_y
                         next_x = curr_x + 5
-                        ax.plot([curr_x, next_x], [curr_y, curr_y], color='green', linewidth=2, linestyle='--')
+                        plot_segment(curr_x, next_x, curr_y, curr_y, 'green', 2, 'dash', 'SWE_Air')
                         curr_x = next_x
                         next_x, next_y = curr_x + 1, depth
-                        ax.plot([curr_x, next_x], [curr_y, next_y], color='green', linewidth=2, linestyle=':')
+                        plot_segment(curr_x, next_x, curr_y, next_y, 'green', 2, 'dot', 'SWE_Air')
                         curr_x, curr_y = next_x, next_y
                         
                         is_swe_o2_flush = (used_o2 and calculate_o2_time(10, depth) is not None)
-                        c_flush = '#32CD32' if is_swe_o2_flush else 'green'
+                        c_flush, w_flush, l_key, l_lbl = ('#32CD32', 3, 'SWE_O2', 'Szwecja Tlen') if is_swe_o2_flush else ('green', 2, 'SWE_Air', None)
                         next_x = curr_x + 10
-                        ax.plot([curr_x, next_x], [curr_y, curr_y], color=c_flush, linewidth=3 if is_swe_o2_flush else 2, linestyle='--')
+                        plot_segment(curr_x, next_x, curr_y, curr_y, c_flush, w_flush, 'dash', l_key, l_lbl)
                         curr_x = next_x
 
                     d_air = stop['duration_air_min']
                     d_o2 = calculate_o2_time(d_air, depth)
                     is_swe_o2 = (used_o2 and d_o2 is not None)
                     dur = d_o2 if is_swe_o2 else d_air
-                    col = '#32CD32' if is_swe_o2 else 'green'
+                    c_seg, w_seg, l_key, l_lbl = ('#32CD32', 3, 'SWE_O2', 'Szwecja Tlen') if is_swe_o2 else ('green', 2, 'SWE_Air', None)
                     
                     next_x = curr_x + dur
-                    ax.plot([curr_x, next_x], [curr_y, curr_y], color=col, linewidth=3 if is_swe_o2 else 2, linestyle='--', alpha=0.8)
+                    plot_segment(curr_x, next_x, curr_y, curr_y, c_seg, w_seg, 'dash', l_key, l_lbl)
                     curr_x = next_x
             
             if curr_y > 0:
                 next_x = curr_x + 1
-                ax.plot([curr_x, next_x], [curr_y, 0], color='green', linewidth=2, linestyle='--', alpha=0.7)
-                
-            ax.plot([], [], color='green', linestyle='--', linewidth=2, label='Szwecja (Porównanie)')
-            if used_o2:
-                 ax.plot([], [], color='#32CD32', linestyle='--', linewidth=3, label='Szwecja Tlen')
+                plot_segment(curr_x, next_x, curr_y, 0, 'green', 2, 'dash', 'SWE_Air')
 
+    fig.update_layout(
+        title=f"Profil Nurkowania [Głębokość Tabeli: {plot_depth}m{us_title_ext}{swe_title_ext} | Czas Dna: {bt_end:.1f} min]",
+        xaxis_title="Czas (min)",
+        yaxis_title="Głębokość (m)",
+        yaxis=dict(
+            autorange="reversed",
+            showspikes=True, spikemode="toaxis+across", spikesnap="cursor",
+            showline=True, showgrid=True, gridcolor='rgba(200,200,200,0.4)',
+            zeroline=True, zerolinecolor='black'
+        ),
+        xaxis=dict(
+            showspikes=True, spikemode="toaxis+across", spikesnap="cursor",
+            showline=True, showgrid=True, gridcolor='rgba(200,200,200,0.4)',
+            zeroline=True, zerolinecolor='black'
+        ),
+        hovermode="closest",
+        plot_bgcolor="white",
+        legend=dict(x=0.75, y=0.05, bgcolor='rgba(255,255,255,0.8)', bordercolor='lightgray', borderwidth=1),
+        margin=dict(l=40, r=40, t=60, b=40)
+    )
 
-    ax.invert_yaxis()
-    ax.set_xlabel("Czas (min)")
-    ax.set_ylabel("Głębokość (m)")
-    ax.legend(loc='lower right')
-    ax.set_title(f"Profil Nurkowania [PL: {plot_depth}m{us_title_ext}{swe_title_ext} | Czas Dna: {bt_end:.1f} min]")
-    ax.grid(True, which='both', linestyle='--', alpha=0.7)
     return fig
 
 def create_pdf(entries):
@@ -907,7 +921,7 @@ def render_logbook_view(placeholder):
             with c_g2: graph_o2 = st.checkbox("Użyto tlenu do dekompresji?", value=data.get('used_o2', False))
         
         fig = generate_dive_profile_chart(graph_time, graph_o2, data, profiles_df, stops_df, p_us, s_us, p_swe, s_swe)
-        if fig: st.pyplot(fig)
+        if fig: st.plotly_chart(fig, use_container_width=True)
         else: st.info("No decompression profile data available for graph generation.")
         st.markdown("---")
 
