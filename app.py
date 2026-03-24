@@ -247,10 +247,18 @@ def sanitize_pl(text):
 
 def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df, stops_df, p_us_df, s_us_df, p_swe_df, s_swe_df):
     profile_id = logbook_data.get('final_profile_id')
+    original_time = logbook_data.get('actual_bottom_time_min', 0)
+    planned_depth = logbook_data.get('depth', 0)
     break_events = logbook_data.get('break_events', []) 
     pre_deco_break = logbook_data.get('pre_deco_break', False)
-    planned_depth = logbook_data.get('depth', 0)
     
+    if abs(actual_time - original_time) > 0.01:
+        pl_depth = get_safe_table_depth(planned_depth, profiles_df)
+        pl_subset = profiles_df[profiles_df['dive_depth_m'] == pl_depth].sort_values('bottom_time_min')
+        pl_idx = calculate_profile_index(pl_subset, actual_time, risk_active=False, is_longer=False)
+        if pl_idx != -1:
+            profile_id = pl_subset.iloc[pl_idx]['profile_id']
+
     if profile_id is None:
         return None
 
