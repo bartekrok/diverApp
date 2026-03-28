@@ -323,12 +323,16 @@ def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df,
     if not my_stops.empty:
         for i, (_, stop) in enumerate(my_stops.iterrows()):
             depth = stop['stop_depth_m']
+            
+            is_subsequent = False
             if curr_y > depth:
-                next_x, next_y = curr_x + 1, depth
+                is_subsequent = True
+                next_x, next_y = curr_x + 1, depth 
                 plot_segment(curr_x, next_x, curr_y, next_y, 'black', 2, 'solid', 'PL_Air')
                 curr_x, curr_y = next_x, next_y
             
-            if (i + 1) in break_events:
+            current_stop_logic_index = i + 1
+            if current_stop_logic_index in break_events:
                 next_x, next_y = curr_x + 1, 0
                 plot_segment(curr_x, next_x, curr_y, next_y, 'black', 2, 'dot', 'PL_Air')
                 curr_x, curr_y = next_x, next_y
@@ -349,9 +353,12 @@ def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df,
             d_o2 = calculate_o2_time(d_air, depth)
             is_o2_segment = (used_o2 and d_o2 is not None)
             dur = d_o2 if is_o2_segment else d_air
+            
+            stay_time = max(0, dur - 1) if is_subsequent else dur
+            
             c_seg, w_seg, l_key, l_lbl = ('#00BFFF', 3, 'PL_O2', 'PL Tlen (O2)') if is_o2_segment else ('black', 2, 'PL_Air', None)
             
-            next_x = curr_x + dur
+            next_x = curr_x + stay_time
             plot_segment(curr_x, next_x, curr_y, curr_y, c_seg, w_seg, 'solid', l_key, l_lbl)
             curr_x = next_x
             
@@ -407,7 +414,9 @@ def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df,
             if not us_stops.empty:
                 for i, (_, stop) in enumerate(us_stops.iterrows()):
                     depth = stop['stop_depth_m']
+                    is_subsequent = False
                     if curr_y > depth:
+                        is_subsequent = True
                         next_x, next_y = curr_x + 1, depth
                         plot_segment(curr_x, next_x, curr_y, next_y, 'red', 2, 'dash', 'US_Air')
                         curr_x, curr_y = next_x, next_y
@@ -433,9 +442,12 @@ def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df,
                     d_o2 = calculate_o2_time(d_air, depth)
                     is_us_o2 = (used_o2 and d_o2 is not None)
                     dur = d_o2 if is_us_o2 else d_air
+                    
+                    stay_time = max(0, dur - 1) if is_subsequent else dur
+                    
                     c_seg, w_seg, l_key, l_lbl = ('#FF6347', 3, 'US_O2', 'US Navy Tlen') if is_us_o2 else ('red', 2, 'US_Air', None)
                     
-                    next_x = curr_x + dur
+                    next_x = curr_x + stay_time
                     plot_segment(curr_x, next_x, curr_y, curr_y, c_seg, w_seg, 'dash', l_key, l_lbl)
                     curr_x = next_x
             
@@ -492,7 +504,9 @@ def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df,
             if not swe_stops.empty:
                 for i, (_, stop) in enumerate(swe_stops.iterrows()):
                     depth = stop['stop_depth_m']
+                    is_subsequent = False
                     if curr_y > depth:
+                        is_subsequent = True
                         next_x, next_y = curr_x + 1, depth
                         plot_segment(curr_x, next_x, curr_y, next_y, 'green', 2, 'dash', 'SWE_Air')
                         curr_x, curr_y = next_x, next_y
@@ -518,9 +532,12 @@ def generate_dive_profile_chart(actual_time, used_o2, logbook_data, profiles_df,
                     d_o2 = calculate_o2_time(d_air, depth)
                     is_swe_o2 = (used_o2 and d_o2 is not None)
                     dur = d_o2 if is_swe_o2 else d_air
+                    
+                    stay_time = max(0, dur - 1) if is_subsequent else dur
+                    
                     c_seg, w_seg, l_key, l_lbl = ('#32CD32', 3, 'SWE_O2', 'Szwecja Tlen') if is_swe_o2 else ('green', 2, 'SWE_Air', None)
                     
-                    next_x = curr_x + dur
+                    next_x = curr_x + stay_time
                     plot_segment(curr_x, next_x, curr_y, curr_y, c_seg, w_seg, 'dash', l_key, l_lbl)
                     curr_x = next_x
             
